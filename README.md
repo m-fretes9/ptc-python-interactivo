@@ -131,6 +131,4 @@ python tests\test_smoke.py
 
 La prueba ejecuta un caso corto sin abrir Streamlit.
 
-## Nota sobre equivalencia numérica
 
-Las ecuaciones, parámetros predeterminados y lógica de cálculo corresponden al MATLAB refactorizado. `ode15s` no existe en SciPy; se usa `solve_ivp(method="BDF")`, que pertenece a la misma familia de integradores implícitos para sistemas rígidos. Por ello, pequeñas diferencias numéricas son normales aunque el modelo físico sea el mismo.
