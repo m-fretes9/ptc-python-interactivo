@@ -278,129 +278,364 @@ def ptc_schematic(config: Mapping[str, Any], selected_node: int) -> go.Figure:
 def thermal_resistance_network(
     snapshot: Mapping[str, float], config: Mapping[str, Any]
 ) -> go.Figure:
+    """Dibuja la red térmica física del receptor para un volumen axial.
+
+    La topología reproduce el circuito clásico de siete nodos:
+
+        (1)--conv.--(2)--cond.--(3)==rad./conv.==(4)--cond.--(5)
+                                                        |--conv.--(6)
+                                                        |--rad.---(7)
+
+    En el modelo numérico actual las paredes son capacitancias concentradas,
+    por lo que T2 = T3 = Tabs y T4 = T5 = Tglass. Las resistencias de
+    conducción se muestran explícitamente para conservar la lectura física
+    del circuito.
+    """
     has_glass = bool(config["model"]["has_glass"])
-    figure = go.Figure()
-    nodes = {
-        "Solar": (0.07, 0.82),
-        "HTF aguas arriba": (0.07, 0.18),
-        "Absorbedor": (0.38, 0.60),
-        "HTF nodo": (0.38, 0.18),
-        "Vidrio": (0.65, 0.60),
-        "Ambiente": (0.92, 0.76),
-        "Cielo": (0.92, 0.38),
-    }
     if not has_glass:
-        nodes.pop("Vidrio")
+        return _thermal_resistance_network_without_glass(snapshot, config)
 
-    for label, (x, y) in nodes.items():
-        if label == "Absorbedor":
-            temperature = snapshot["Tabs_C"]
-        elif label == "HTF nodo":
-            temperature = snapshot["Tf_C"]
-        elif label == "Vidrio":
-            temperature = snapshot["Tglass_C"]
-        elif label == "Ambiente":
-            temperature = config["environment"]["Tamb_K"] - 273.15
-        elif label == "Cielo":
-            temperature = (
-                config["environment"]["Tamb_K"]
-                - config["environment"]["sky_delta_K"]
-                - 273.15
-            )
-        else:
-            temperature = None
-        text = label if temperature is None else f"{label}<br>{temperature:.2f} °C"
-        figure.add_shape(
-            type="rect",
-            x0=x - 0.085,
-            x1=x + 0.085,
-            y0=y - 0.055,
-            y1=y + 0.055,
-            line={"width": 1.5},
-            fillcolor="rgba(150,150,150,0.10)",
-        )
-        figure.add_annotation(x=x, y=y, text=text, showarrow=False, align="center")
+    g = config["geometry"]
+    absorber = config["materials"]["absorber"]
+    glass = config["materials"]["glass"]
+    environment = config["environment"]
 
-    _add_heat_arrow(
-        figure,
-        nodes["Solar"],
-        nodes["Absorbedor"],
-        f"Qsolar = {snapshot['Qsolar_abs_node_W']:.2f} W",
-        y_offset=0.07,
+    n_segments = max(int(g["Nseg"]), 1)
+    dx = float(g["L"]) / n_segments
+    area_inner = np.pi * float(g["D2"]) * dx
+    h_internal = max(float(snapshot["h_internal_W_m2K"]), np.finfo(float).eps)
+
+    r12 = 1.0 / (h_internal * area_inner)
+    r23 = np.log(float(g["D3"]) / float(g["D2"])) / (
+        2.0 * np.pi * float(absorber["k"]) * dx
     )
-    _add_heat_arrow(
-        figure,
-        nodes["HTF aguas arriba"],
-        nodes["HTF nodo"],
-        f"Qadv = {snapshot['Qadvection_W']:.2f} W",
-        y_offset=-0.07,
+    r34_rad = float(snapshot["R_rad_abs_glass_K_W"])
+    r34_conv = float(snapshot["R_conv_annulus_K_W"])
+    r45 = np.log(float(g["D5"]) / float(g["D4"])) / (
+        2.0 * np.pi * float(glass["k"]) * dx
     )
-    _add_resistor(
-        figure,
-        nodes["Absorbedor"],
-        nodes["HTF nodo"],
-        f"Rint = {_fmt_resistance(snapshot['R_internal_K_W'])}\nQ = {snapshot['Qfluid_W']:.2f} W",
-        orientation="vertical",
+    r56 = float(snapshot["R_conv_external_K_W"])
+    r57 = float(snapshot["R_rad_sky_K_W"])
+
+    q12 = float(snapshot["Qfluid_W"])
+    q23 = q12
+    q34_rad = float(snapshot["Qrad_abs_glass_W"])
+    q34_conv = float(snapshot["Qconv_annulus_W"])
+    q56 = float(snapshot["Qconv_external_W"])
+    q57 = float(snapshot["Qrad_sky_W"])
+    q45 = q56 + q57
+
+    tamb_c = float(environment["Tamb_K"]) - 273.15
+    tsky_c = tamb_c - float(environment["sky_delta_K"])
+    temperatures = {
+        1: float(snapshot["Tf_C"]),
+        2: float(snapshot["Tabs_C"]),
+        3: float(snapshot["Tabs_C"]),
+        4: float(snapshot["Tglass_C"]),
+        5: float(snapshot["Tglass_C"]),
+        6: tamb_c,
+        7: tsky_c,
+    }
+
+    # Coordenadas: el trazado replica la disposición de la figura de referencia.
+    y_mid = 0.50
+    y_top = 0.73
+    y_bottom = 0.27
+    x1, x2, x3, x4, x5, x_end = 0.04, 0.17, 0.31, 0.55, 0.69, 0.94
+
+    fig = go.Figure()
+
+    # Ramas principales 1-2, 2-3 y 4-5.
+    _add_black_resistor(
+        fig, x1, y_mid, x2, y_mid,
+        hover=_network_hover("Convección interna", "R12", r12, "Q12", q12),
+    )
+    _add_black_resistor(
+        fig, x2, y_mid, x3, y_mid,
+        hover=_network_hover("Conducción en el absorbedor", "R23", r23, "Q23", q23),
+    )
+    _add_black_resistor(
+        fig, x4, y_mid, x5, y_mid,
+        hover=_network_hover("Conducción en el vidrio", "R45", r45, "Q45", q45),
     )
 
-    if has_glass:
-        _add_resistor(
-            figure,
-            (nodes["Absorbedor"][0], nodes["Absorbedor"][1] + 0.035),
-            (nodes["Vidrio"][0], nodes["Vidrio"][1] + 0.035),
-            f"Rrad,a-g = {_fmt_resistance(snapshot['R_rad_abs_glass_K_W'])}\nQrad = {snapshot['Qrad_abs_glass_W']:.2f} W",
-            orientation="horizontal",
-        )
-        _add_resistor(
-            figure,
-            (nodes["Absorbedor"][0], nodes["Absorbedor"][1] - 0.055),
-            (nodes["Vidrio"][0], nodes["Vidrio"][1] - 0.055),
-            f"Rconv,an = {_fmt_resistance(snapshot['R_conv_annulus_K_W'])}\nQconv = {snapshot['Qconv_annulus_W']:.2f} W",
-            orientation="horizontal",
-        )
-        _add_resistor(
-            figure,
-            nodes["Vidrio"],
-            nodes["Ambiente"],
-            f"Rconv,ext = {_fmt_resistance(snapshot['R_conv_external_K_W'])}\nQ = {snapshot['Qconv_external_W']:.2f} W",
-            orientation="horizontal",
-        )
-        _add_resistor(
-            figure,
-            nodes["Vidrio"],
-            nodes["Cielo"],
-            f"Rrad,cielo = {_fmt_resistance(snapshot['R_rad_sky_K_W'])}\nQ = {snapshot['Qrad_sky_W']:.2f} W",
-            orientation="horizontal",
-        )
-    else:
-        _add_resistor(
-            figure,
-            nodes["Absorbedor"],
-            nodes["Ambiente"],
-            f"Rconv,ext = {_fmt_resistance(snapshot['R_conv_external_K_W'])}\nQ = {snapshot['Qconv_external_W']:.2f} W",
-            orientation="horizontal",
-        )
-        _add_resistor(
-            figure,
-            nodes["Absorbedor"],
-            nodes["Cielo"],
-            f"Rrad,cielo = {_fmt_resistance(snapshot['R_rad_sky_K_W'])}\nQ = {snapshot['Qrad_sky_W']:.2f} W",
-            orientation="horizontal",
-        )
+    # Paralelo absorbedor-vidrio: radiación arriba y convección abajo.
+    _add_black_polyline(fig, [x3, x3], [y_mid, y_top])
+    _add_black_resistor(
+        fig, x3, y_top, x4, y_top,
+        hover=_network_hover("Radiación absorbedor-vidrio", "R34,rad", r34_rad, "Q34,rad", q34_rad),
+    )
+    _add_black_polyline(fig, [x4, x4], [y_top, y_mid])
 
-    figure.update_xaxes(range=[-0.03, 1.03], visible=False)
-    figure.update_yaxes(range=[0.02, 0.98], visible=False)
-    figure.update_layout(
-        height=580,
-        title=(
-            f"Red térmica del nodo {int(snapshot['node_index']) + 1} "
-            f"a LAT {snapshot['LAT_h']:.3f} h"
+    _add_black_polyline(fig, [x3, x3], [y_mid, y_bottom])
+    _add_black_resistor(
+        fig, x3, y_bottom, x4, y_bottom,
+        hover=_network_hover("Convección en el anular", "R34,conv", r34_conv, "Q34,conv", q34_conv),
+    )
+    _add_black_polyline(fig, [x4, x4], [y_bottom, y_mid])
+
+    # Paralelo vidrio-entorno: radiación al cielo y convección al ambiente.
+    _add_black_polyline(fig, [x5, x5], [y_mid, y_top])
+    _add_black_resistor(
+        fig, x5, y_top, x_end, y_top,
+        hover=_network_hover("Radiación al cielo", "R57", r57, "Q57", q57),
+    )
+
+    _add_black_polyline(fig, [x5, x5], [y_mid, y_bottom])
+    _add_black_resistor(
+        fig, x5, y_bottom, x_end, y_bottom,
+        hover=_network_hover("Convección exterior", "R56", r56, "Q56", q56),
+    )
+
+    # Nodos físicos negros.
+    node_coordinates = {
+        1: (x1, y_mid),
+        2: (x2, y_mid),
+        3: (x3, y_mid),
+        4: (x4, y_mid),
+        5: (x5, y_mid),
+        6: (x_end, y_bottom),
+        7: (x_end, y_top),
+    }
+    for number, (x, y) in node_coordinates.items():
+        _add_black_node(fig, x, y, number, temperatures[number])
+
+    # Etiquetas de mecanismos, manteniendo la misma lectura de la referencia.
+    _add_network_label(fig, 0.5 * (x1 + x2), 0.39, "convección interna", r12, q12)
+    _add_network_label(fig, 0.5 * (x2 + x3), 0.39, "conducción", r23, q23)
+    _add_network_label(fig, 0.5 * (x3 + x4), 0.86, "radiación", r34_rad, q34_rad)
+    _add_network_label(fig, 0.5 * (x3 + x4), 0.10, "convección", r34_conv, q34_conv)
+    _add_network_label(fig, 0.5 * (x4 + x5), 0.39, "conducción", r45, q45)
+    _add_network_label(fig, 0.5 * (x5 + x_end), 0.86, "radiación", r57, q57)
+    _add_network_label(fig, 0.5 * (x5 + x_end), 0.10, "convección", r56, q56)
+
+    fig.add_annotation(
+        x=0.50,
+        y=-0.055,
+        xref="paper",
+        yref="paper",
+        text=(
+            "Nodos: 1 HTF; 2 pared interna del absorbedor; 3 pared externa del absorbedor; "
+            "4 pared interna del vidrio; 5 pared externa del vidrio; 6 ambiente; 7 cielo. "
+            "Modelo lumped: T2 = T3 y T4 = T5."
         ),
-        showlegend=False,
-        margin={"l": 20, "r": 20, "t": 70, "b": 20},
+        showarrow=False,
+        font={"color": "black", "size": 11},
+        align="center",
     )
-    return figure
 
+    fig.update_xaxes(range=[0.0, 0.98], visible=False, fixedrange=True)
+    fig.update_yaxes(range=[0.0, 0.94], visible=False, fixedrange=True)
+    fig.update_layout(
+        height=560,
+        title={
+            "text": (
+                f"Circuito térmico del nodo axial {int(snapshot['node_index']) + 1} "
+                f"· LAT {snapshot['LAT_h']:.3f} h"
+            ),
+            "x": 0.5,
+            "xanchor": "center",
+            "font": {"color": "black", "size": 18},
+        },
+        showlegend=False,
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font={"color": "black"},
+        hoverlabel={"bgcolor": "white", "font_color": "black", "bordercolor": "black"},
+        margin={"l": 12, "r": 12, "t": 70, "b": 78},
+    )
+    return fig
+
+
+def _thermal_resistance_network_without_glass(
+    snapshot: Mapping[str, float], config: Mapping[str, Any]
+) -> go.Figure:
+    """Red equivalente cuando el receptor se configura sin cubierta de vidrio."""
+    g = config["geometry"]
+    absorber = config["materials"]["absorber"]
+    environment = config["environment"]
+    n_segments = max(int(g["Nseg"]), 1)
+    dx = float(g["L"]) / n_segments
+    area_inner = np.pi * float(g["D2"]) * dx
+    h_internal = max(float(snapshot["h_internal_W_m2K"]), np.finfo(float).eps)
+    r12 = 1.0 / (h_internal * area_inner)
+    r23 = np.log(float(g["D3"]) / float(g["D2"])) / (
+        2.0 * np.pi * float(absorber["k"]) * dx
+    )
+    r36 = float(snapshot["R_conv_external_K_W"])
+    r37 = float(snapshot["R_rad_sky_K_W"])
+    q12 = float(snapshot["Qfluid_W"])
+    q36 = float(snapshot["Qconv_external_W"])
+    q37 = float(snapshot["Qrad_sky_W"])
+    tamb_c = float(environment["Tamb_K"]) - 273.15
+    tsky_c = tamb_c - float(environment["sky_delta_K"])
+
+    fig = go.Figure()
+    x1, x2, x3, x_end = 0.05, 0.22, 0.40, 0.94
+    y_mid, y_top, y_bottom = 0.50, 0.72, 0.28
+    _add_black_resistor(fig, x1, y_mid, x2, y_mid, hover=_network_hover("Convección interna", "R12", r12, "Q12", q12))
+    _add_black_resistor(fig, x2, y_mid, x3, y_mid, hover=_network_hover("Conducción absorbedor", "R23", r23, "Q23", q12))
+    _add_black_polyline(fig, [x3, x3], [y_mid, y_top])
+    _add_black_resistor(fig, x3, y_top, x_end, y_top, hover=_network_hover("Radiación al cielo", "R37", r37, "Q37", q37))
+    _add_black_polyline(fig, [x3, x3], [y_mid, y_bottom])
+    _add_black_resistor(fig, x3, y_bottom, x_end, y_bottom, hover=_network_hover("Convección exterior", "R36", r36, "Q36", q36))
+
+    temperatures = {
+        1: float(snapshot["Tf_C"]),
+        2: float(snapshot["Tabs_C"]),
+        3: float(snapshot["Tabs_C"]),
+        6: tamb_c,
+        7: tsky_c,
+    }
+    coordinates = {1: (x1, y_mid), 2: (x2, y_mid), 3: (x3, y_mid), 6: (x_end, y_bottom), 7: (x_end, y_top)}
+    for number, (x, y) in coordinates.items():
+        _add_black_node(fig, x, y, number, temperatures[number])
+
+    _add_network_label(fig, 0.5 * (x1 + x2), 0.39, "convección interna", r12, q12)
+    _add_network_label(fig, 0.5 * (x2 + x3), 0.39, "conducción", r23, q12)
+    _add_network_label(fig, 0.5 * (x3 + x_end), 0.84, "radiación", r37, q37)
+    _add_network_label(fig, 0.5 * (x3 + x_end), 0.12, "convección", r36, q36)
+
+    fig.add_annotation(
+        x=0.5, y=-0.05, xref="paper", yref="paper",
+        text="Configuración sin vidrio: los nodos 4 y 5 no forman parte del circuito.",
+        showarrow=False, font={"color": "black", "size": 11},
+    )
+    fig.update_xaxes(range=[0.0, 0.98], visible=False, fixedrange=True)
+    fig.update_yaxes(range=[0.0, 0.94], visible=False, fixedrange=True)
+    fig.update_layout(
+        height=540,
+        title={"text": f"Circuito térmico del nodo axial {int(snapshot['node_index']) + 1}", "x": 0.5, "font": {"color": "black"}},
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font={"color": "black"},
+        hoverlabel={"bgcolor": "white", "font_color": "black", "bordercolor": "black"},
+        showlegend=False,
+        margin={"l": 12, "r": 12, "t": 70, "b": 70},
+    )
+    return fig
+
+
+def _add_black_resistor(
+    figure: go.Figure,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    hover: str,
+    teeth: int = 6,
+) -> None:
+    """Agrega una resistencia en zigzag, siempre negra y sobre fondo blanco."""
+    dx = x1 - x0
+    dy = y1 - y0
+    length = max(float(np.hypot(dx, dy)), np.finfo(float).eps)
+    ux, uy = dx / length, dy / length
+    nx, ny = -uy, ux
+    lead = min(0.018, 0.14 * length)
+    amplitude = min(0.020, 0.12 * length)
+
+    start_x, start_y = x0 + lead * ux, y0 + lead * uy
+    end_x, end_y = x1 - lead * ux, y1 - lead * uy
+    n_points = 2 * teeth + 1
+    base_x = np.linspace(start_x, end_x, n_points)
+    base_y = np.linspace(start_y, end_y, n_points)
+    zig = np.zeros(n_points)
+    zig[1:-1] = amplitude * np.where(np.arange(1, n_points - 1) % 2 == 1, 1.0, -1.0)
+    xs = np.concatenate(([x0], base_x + zig * nx, [x1]))
+    ys = np.concatenate(([y0], base_y + zig * ny, [y1]))
+    figure.add_trace(
+        go.Scatter(
+            x=xs,
+            y=ys,
+            mode="lines",
+            line={"color": "black", "width": 2.2},
+            hovertemplate=hover + "<extra></extra>",
+            showlegend=False,
+        )
+    )
+
+
+def _add_black_polyline(figure: go.Figure, xs: list[float], ys: list[float]) -> None:
+    figure.add_trace(
+        go.Scatter(
+            x=xs,
+            y=ys,
+            mode="lines",
+            line={"color": "black", "width": 2.2},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+
+def _add_black_node(
+    figure: go.Figure,
+    x: float,
+    y: float,
+    number: int,
+    temperature_c: float,
+) -> None:
+    figure.add_trace(
+        go.Scatter(
+            x=[x],
+            y=[y],
+            mode="markers",
+            marker={"size": 8, "color": "black", "line": {"color": "black", "width": 1}},
+            hovertemplate=f"Nodo {number}<br>T{number} = {temperature_c:.2f} °C<extra></extra>",
+            showlegend=False,
+        )
+    )
+    horizontal_shift = -0.025 if number == 1 else (0.022 if number in {6, 7} else 0.0)
+    vertical_shift = 0.0 if number in {1, 6, 7} else -0.052
+    figure.add_annotation(
+        x=x + horizontal_shift,
+        y=y + vertical_shift,
+        text=f"({number})",
+        showarrow=False,
+        font={"color": "black", "size": 13},
+        xanchor="right" if number == 1 else ("left" if number in {6, 7} else "center"),
+        yanchor="middle" if number in {1, 6, 7} else "top",
+    )
+
+
+def _add_network_label(
+    figure: go.Figure,
+    x: float,
+    y: float,
+    mechanism: str,
+    resistance: float,
+    heat_flow: float,
+) -> None:
+    figure.add_annotation(
+        x=x,
+        y=y,
+        text=(
+            f"<b>{mechanism}</b><br>"
+            f"R = {_fmt_resistance(resistance)}<br>"
+            f"Q = {heat_flow:.2f} W"
+        ),
+        showarrow=False,
+        align="center",
+        font={"color": "black", "size": 11},
+        bgcolor="white",
+        borderpad=1,
+    )
+
+
+def _network_hover(
+    mechanism: str,
+    resistance_name: str,
+    resistance: float,
+    heat_name: str,
+    heat_flow: float,
+) -> str:
+    return (
+        f"<b>{mechanism}</b><br>"
+        f"{resistance_name} = {_fmt_resistance(resistance)}<br>"
+        f"{heat_name} = {heat_flow:.4g} W"
+    )
 
 def property_figure(curve: pd.DataFrame, fluid_name: str) -> go.Figure:
     figure = make_subplots(
