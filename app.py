@@ -318,14 +318,36 @@ with tab_sim:
     if result is None:
         st.info("Configure el caso y pulse Ejecutar simulación.")
     else:
-        k_peak = int(np.nanargmax(result.scalar_diag["DNI_W_m2"]))
+        # Instante representativo de los KPIs:
+        # - con DNI constante, np.nanargmax devuelve siempre el primer punto (t0),
+        #   donde por la condición inicial Tout = Tin y la eficiencia transitoria es 0 %.
+        # - con irradiación variable, mantenemos el instante de DNI máximo.
+        dni_series = np.asarray(result.scalar_diag["DNI_W_m2"], dtype=float)
+        finite_idx = np.flatnonzero(np.isfinite(dni_series))
+        if finite_idx.size == 0:
+            k_ref = len(result.t_s) - 1
+            kpi_caption = "KPIs en el estado final (DNI no disponible)."
+        else:
+            dni_valid = dni_series[finite_idx]
+            dni_scale = max(float(np.nanmax(np.abs(dni_valid))), 1.0)
+            dni_is_constant = float(np.nanmax(dni_valid) - np.nanmin(dni_valid)) <= 1e-8 * dni_scale
+            if dni_is_constant:
+                k_ref = int(finite_idx[-1])
+                kpi_caption = "KPIs en el estado final: el DNI es constante, por lo que se evita usar el punto inicial transitorio."
+            else:
+                max_dni = float(np.nanmax(dni_valid))
+                peak_candidates = finite_idx[np.isclose(dni_series[finite_idx], max_dni, rtol=1e-10, atol=1e-9)]
+                k_ref = int(peak_candidates[-1]) if peak_candidates.size else int(finite_idx[np.nanargmax(dni_valid)])
+                kpi_caption = "KPIs en el instante de DNI máximo."
+
         cols = st.columns(6)
-        cols[0].metric("DNI pico", f"{result.scalar_diag['DNI_W_m2'][k_peak]:.1f} W/m²")
-        cols[1].metric("T salida", f"{result.Tout_C[k_peak]:.2f} °C")
-        cols[2].metric("T absorbedor", f"{result.Tabs_mean_C[k_peak]:.2f} °C")
-        cols[3].metric("Q útil", f"{result.scalar_diag['Quseful_W'][k_peak]:.1f} W")
-        cols[4].metric("Q pérdidas", f"{result.scalar_diag['Qloss_W'][k_peak]:.1f} W")
-        cols[5].metric("Eficiencia", f"{result.scalar_diag['eta_pct'][k_peak]:.2f} %")
+        cols[0].metric("DNI", f"{result.scalar_diag['DNI_W_m2'][k_ref]:.1f} W/m²")
+        cols[1].metric("T salida", f"{result.Tout_C[k_ref]:.2f} °C")
+        cols[2].metric("T absorbedor", f"{result.Tabs_mean_C[k_ref]:.2f} °C")
+        cols[3].metric("Q útil", f"{result.scalar_diag['Quseful_W'][k_ref]:.1f} W")
+        cols[4].metric("Q pérdidas", f"{result.scalar_diag['Qloss_W'][k_ref]:.1f} W")
+        cols[5].metric("Eficiencia", f"{result.scalar_diag['eta_pct'][k_ref]:.2f} %")
+        st.caption(kpi_caption)
         if len(st.session_state.results) > 1:
             st.plotly_chart(comparative_overview(st.session_state.results), use_container_width=True)
         else:
