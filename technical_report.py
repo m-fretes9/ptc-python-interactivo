@@ -47,7 +47,15 @@ def build_technical_report(config: Mapping[str, Any]) -> str:
         f"Reflectividad = {optics['reflectivity']:.6g}; factor de interceptacion = {optics['intercept_factor']:.6g}; suciedad = {optics['dirt_factor']:.6g}; sombra = {optics['shade_factor']:.6g}",
         "",
         "AMBIENTE, OPERACION Y SOLVER",
-        f"Tamb = {environment['Tamb_K'] - 273.15:.6g} C; Tsky = Tamb - {environment['sky_delta_K']:.6g} K",
+        f"Tamb = {environment['Tamb_K'] - 273.15:.6g} C; modelo de Tsky = {environment.get('sky_model', 'delta_constante')}",
+        (
+            f"Rea Quille/Martin-Berdahl: Tdp = {environment.get('dew_point_C', float('nan')):.6g} C; "
+            f"correccion nubosidad = {bool(environment.get('cloud_adjustment', False))}; "
+            f"f_nuvem = {environment.get('cloud_factor', 0.0):.6g}; eps_nuvem = {environment.get('cloud_emissivity', 1.0):.6g}; "
+            f"formula = {environment.get('cloud_formula', 'rea_quille_impresa')}"
+            if environment.get('sky_model', 'delta_constante') == 'rea_quille'
+            else f"Tsky = Tamb - {environment.get('sky_delta_K', 6.0):.6g} K"
+        ),
         f"Viento = {environment['wind_m_s']:.6g} m/s; presion = {environment['pressure_Pa']:.6g} Pa",
         f"Fluido = {operation['fluid']}; mdot = {operation['mdot']:.6g} kg/s; Tin = {operation['Tin_K'] - 273.15:.6g} C",
         f"Intervalo = {operation['t_start_s']/3600:.6g} a {operation['t_end_s']/3600:.6g} h; salida cada {operation['output_step_s']:.6g} s",
@@ -88,6 +96,11 @@ def build_technical_report(config: Mapping[str, Any]) -> str:
         "Qconv_anular = h_anular*pi*D3*dx*(Tabs-Tvid)",
         "Qconv_ext = h_ext*pi*Dext*dx*(Tsuperficie-Tamb)",
         "Qrad_cielo = eps*sigma*pi*Dext*dx*(Tsuperficie^4-Tsky^4)",
+        "Modelo Tsky de Rea Quille / Martin-Berdahl (cuando sky_model=rea_quille):",
+        "eps0_sky = 0.711 + 0.56*(Tdp/100) + 0.73*(Tdp/100)^2 + 0.013*cos(2*pi*tm/24) + (0.012/100)*(P_mbar-1000)",
+        "Ec. 13 impresa: eps_sky = eps0_sky + (1 + eps0_sky)*f_nuvem*eps_nuvem",
+        "Tsky_K = eps_sky^0.25 * Tamb_K",
+        "Nota: la app conserva la Ec. 13 impresa y ofrece una variante (1-eps0) solo como sensibilidad explícita.",
         "",
         "RADIACION Y OPTICA",
         "DNI = A*exp(-B/cos(z))",

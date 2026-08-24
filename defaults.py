@@ -140,7 +140,17 @@ def default_config() -> dict[str, Any]:
         },
         "environment": {
             "Tamb_K": 31.9 + 273.15,
-            "sky_delta_K": 6.0,
+            # Modelo de temperatura efectiva del cielo. El modo rea_quille implementa
+            # las Ecs. (12)-(14) tal como aparecen en Rea Quille (2025).
+            "sky_model": "rea_quille",
+            "sky_delta_K": 6.0,  # Solo se usa en el modo legado delta_constante.
+            "dew_point_C": 20.0,
+            "cloud_adjustment": False,
+            "cloud_factor": 0.0,
+            "cloud_emissivity": 1.0,
+            # La ecuación (13) impresa usa (1 + eps0). Se conserva como opción literal.
+            # También se ofrece una variante física (1 - eps0) para análisis de sensibilidad.
+            "cloud_formula": "rea_quille_impresa",
             "wind_m_s": 5.3,
             "pressure_Pa": 101325.0,
         },

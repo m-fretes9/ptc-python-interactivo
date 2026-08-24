@@ -176,6 +176,9 @@ class PTCSimulator:
             "eta_balance_pct",
             "Qstorage_est_W",
             "UL_W_m2K",
+            "Tsky_C",
+            "eps_sky_clear",
+            "eps_sky",
         ]
         node_names = [
             "Qfluid_W",
@@ -296,7 +299,8 @@ class PTCSimulator:
         Cabs = float(absorber["rho"]) * Vabs * float(absorber["Cp"])
         Cglass = float(glass["rho"]) * Vglass * float(glass["Cp"])
         Tamb = float(cfg["environment"]["Tamb_K"])
-        Tsky = Tamb - float(cfg["environment"]["sky_delta_K"])
+        sky = effective_sky_temperature(time_s, cfg["environment"])
+        Tsky = float(sky["Tsky_K"])
         mdot = float(cfg["operation"]["mdot"])
         Tin = float(cfg["operation"]["Tin_K"])
 
@@ -511,6 +515,9 @@ class PTCSimulator:
             "eta_balance_pct": eta_balance,
             "Qstorage_est_W": Qstorage_est,
             "UL_W_m2K": UL,
+            "Tsky_C": float(Tsky - 273.15),
+            "eps_sky_clear": float(sky["eps_clear"]),
+            "eps_sky": float(sky["eps_sky"]),
             "Qsolar_abs_node_W": np.full(n, q_solar_abs_node),
             "Qsolar_glass_node_W": np.full(n, q_solar_glass_node),
             "dTf_dt_K_s": arrays["dTf"].copy(),
@@ -726,6 +733,65 @@ def internal_convection(
         "transition_weight": float(weight),
         "correlation": correlation,
     }
+
+
+def effective_sky_temperature(time_s: float, environment: Mapping[str, Any]) -> dict[str, float]:
+    """Temperatura efectiva del cielo.
+
+    Modo ``rea_quille``: implementa las Ecs. (12)-(14) del TCC de
+    Rea Quille (2025), basado en Martin y Berdahl (1984). La ecuación
+    (13) se puede evaluar literalmente tal como está impresa
+    (1 + eps0) o, para análisis de sensibilidad, con la variante física
+    habitual (1 - eps0). No se sustituye silenciosamente una por otra.
+
+    Modo ``delta_constante``: conserva el comportamiento legado
+    Tsky = Tamb - sky_delta_K.
+    """
+    Tamb_K = float(environment["Tamb_K"])
+    mode = str(environment.get("sky_model", "delta_constante")).lower()
+    if mode == "delta_constante":
+        delta = float(environment.get("sky_delta_K", 6.0))
+        Tsky_K = Tamb_K - delta
+        eps = max((Tsky_K / Tamb_K) ** 4, np.finfo(float).eps)
+        return {"Tsky_K": float(Tsky_K), "eps_clear": float(eps), "eps_sky": float(eps)}
+
+    if mode != "rea_quille":
+        raise ValueError(f"Modelo de temperatura del cielo no reconocido: {mode}")
+
+    tm_h = (float(time_s) / 3600.0) % 24.0
+    Tdp_C = float(environment.get("dew_point_C", 20.0))
+    P_mbar = float(environment.get("pressure_Pa", 101325.0)) / 100.0
+
+    # Ec. (12) de Rea Quille: emisividad efectiva de cielo claro.
+    eps_clear = (
+        0.711
+        + 0.56 * (Tdp_C / 100.0)
+        + 0.73 * (Tdp_C / 100.0) ** 2
+        + 0.013 * np.cos(2.0 * np.pi * tm_h / 24.0)
+        + (0.012 / 100.0) * (P_mbar - 1000.0)
+    )
+
+    eps_sky = eps_clear
+    if bool(environment.get("cloud_adjustment", False)):
+        f_cloud = float(environment.get("cloud_factor", 0.0))
+        eps_cloud = float(environment.get("cloud_emissivity", 1.0))
+        formula = str(environment.get("cloud_formula", "rea_quille_impresa")).lower()
+        if formula == "rea_quille_impresa":
+            # Ec. (13) tal como aparece impresa en el TCC: (1 + eps0).
+            eps_sky = eps_clear + (1.0 + eps_clear) * f_cloud * eps_cloud
+        elif formula == "variante_fisica":
+            # Variante disponible solo para sensibilidad; no se atribuye al TCC.
+            eps_sky = eps_clear + (1.0 - eps_clear) * f_cloud * eps_cloud
+            eps_sky = float(np.clip(eps_sky, np.finfo(float).eps, 1.0))
+        else:
+            raise ValueError(f"Fórmula de nubosidad no reconocida: {formula}")
+
+    if eps_sky <= 0.0:
+        raise ValueError("La emisividad efectiva del cielo debe ser positiva.")
+
+    # Ec. (14): Tsky[K] = eps_sky^0.25 * Tamb[K].
+    Tsky_K = float(eps_sky ** 0.25 * Tamb_K)
+    return {"Tsky_K": Tsky_K, "eps_clear": float(eps_clear), "eps_sky": float(eps_sky)}
 
 
 def external_convection(

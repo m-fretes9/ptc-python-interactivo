@@ -169,3 +169,17 @@ La pestaña **Validación** permite:
 4. cargar la Tabela 8 experimental/TRNSYS del prototipo.
 
 En la pestaña **Simulación**, cuando el caso activo proviene de un preset, aparece también **Comparación rápida con la referencia del preset**.
+
+## Modelo de temperatura efectiva del cielo — Rea Quille / Martin-Berdahl
+
+La aplicación ya no necesita asumir por defecto `Tsky = Tamb - 6 K` para los presets de Rea Quille.
+Se implementaron las Ecs. (12)-(14) descritas en la sección 3.2.7 del TCC:
+
+- emisividad de cielo claro en función de `Tdp`, hora del día y presión;
+- corrección opcional por nubosidad;
+- `Tsky_K = eps_sky**0.25 * Tamb_K`.
+
+En `Operación y ambiente` se puede escoger entre el modelo de Rea Quille y el modo legado de diferencia constante.
+Las Tablas 8, 10 y 11 no publican punto de rocío ni parámetros de nubosidad, por lo que los presets de Rea usan `Tdp = 15 °C` y cielo claro como hipótesis explícita editable. El modo de nubosidad queda desactivado hasta disponer de esos datos.
+
+**Advertencia documental:** la Ec. (13) impresa en el TCC contiene `(1 + eps0)` y el texto indica a la vez que `f_nuvem = 0` representa cielo totalmente nublado. Esas dos afirmaciones no son consistentes entre sí. La app conserva la ecuación impresa como opción literal y ofrece una variante `(1 - eps0)` únicamente para sensibilidad, claramente identificada como tal.

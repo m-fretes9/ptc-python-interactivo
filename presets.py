@@ -107,7 +107,13 @@ def _apply_rea_geometry(cfg: dict[str, Any]) -> None:
     )
     cfg["environment"].update(
         {
-            "sky_delta_K": 6.0,
+            "sky_model": "rea_quille",
+            "dew_point_C": 15.0,
+            "cloud_adjustment": False,
+            "cloud_factor": 0.0,
+            "cloud_emissivity": 1.0,
+            "cloud_formula": "rea_quille_impresa",
+            "sky_delta_K": 6.0,  # legado; no se usa mientras sky_model=rea_quille
             "wind_m_s": 1.0,
             "pressure_Pa": 101325.0,
         }
@@ -118,7 +124,8 @@ def _apply_rea_geometry(cfg: dict[str, Any]) -> None:
 def _rea_assumptions(monthly: bool = False) -> list[str]:
     items = [
         "Reflectividad efectiva 0.85 e interceptación 0.95: no están tabuladas por Rea Quille; son hipótesis editables heredadas del modelo base.",
-        "Viento 1.0 m/s y Tamb-Tsky=6 K: la tabla de Rea Quille no publica estos valores; son hipótesis necesarias para nuestro balance de pérdidas.",
+        "Viento 1.0 m/s: la tabla de Rea Quille no publica este valor; es una hipótesis editable para nuestro balance de pérdidas.",
+        "Temperatura de cielo: se implementan las Ecs. (12)-(14) de Rea Quille/Martin-Berdahl. Las tablas 8, 10 y 11 no publican Tdp, f_nuvem ni epsilon_nuvem; el preset usa Tdp=15 °C y cielo claro (sin corrección de nubosidad) como hipótesis explícita editable.",
         "Propiedades rho, Cp y k del cobre: valores de ingeniería del modelo; el TCC identifica tubo de cobre pero no tabula estas propiedades.",
         "D4/D5 se conservan solo por compatibilidad de estructura; has_glass=False y no participan del circuito físico del prototipo.",
     ]
@@ -342,7 +349,13 @@ def build_bhambare_sukhatme_preset() -> tuple[dict[str, Any], dict[str, Any]]:
             "tracking": "N-S horizontal, un eje",
         }
     )
-    cfg["environment"].update({"Tamb_K": 31.9 + 273.15, "sky_delta_K": 6.0, "wind_m_s": 5.3, "pressure_Pa": 101325.0})
+    cfg["environment"].update({
+        "Tamb_K": 31.9 + 273.15,
+        "sky_model": "delta_constante",
+        "sky_delta_K": 6.0,
+        "wind_m_s": 5.3,
+        "pressure_Pa": 101325.0,
+    })
     cfg["solar"].update(
         {
             "mode": "constante",

@@ -42,3 +42,7 @@ La variable `PrWall` pertenece exclusivamente a la convección interna. La funci
 ## 2026-08-24 — Presets de referencia
 
 Se añadió `presets.py` para evitar mezclar parámetros de Bhambare con el prototipo de Fiamonzini/Rea Quille. Los presets documentales cargan toda la configuración de una sola vez y guardan la referencia y los parámetros no publicados en `config["preset_meta"]`.
+
+### Actualización: temperatura efectiva del cielo
+
+Se sustituyó el supuesto fijo `Tamb - Tsky = 6 K` en los presets de Rea Quille por el modelo Martin-Berdahl reportado en las Ecs. (12)-(14) de su TCC. Bhambare/Sukhatme conserva el modo legado para no alterar esa validación con una hipótesis procedente de otra fuente.

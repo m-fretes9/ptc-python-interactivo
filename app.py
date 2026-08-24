@@ -14,7 +14,7 @@ import streamlit as st
 from defaults import default_config, default_fluid_database
 from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_summary_rows
 from fluid_properties import FluidPropertyEvaluator, property_curve
-from ptc_model import PTCSimulator, SimulationResult
+from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
 from validations import (
     prototype_tcc_table,
@@ -367,7 +367,66 @@ with st.sidebar:
         operation["Tin_K"] = Tin_C + 273.15
         Tamb_C = st.number_input("Temperatura ambiente (°C)", value=float(environment["Tamb_K"] - 273.15), step=1.0)
         environment["Tamb_K"] = Tamb_C + 273.15
-        environment["sky_delta_K"] = st.number_input("Tamb - Tsky (K)", min_value=0.0, value=float(environment["sky_delta_K"]), step=0.5)
+
+        sky_labels = {
+            "rea_quille": "Rea Quille / Martin-Berdahl (Ecs. 12-14)",
+            "delta_constante": "Legado: Tsky = Tamb - ΔT",
+        }
+        sky_modes = list(sky_labels.keys())
+        current_sky = str(environment.get("sky_model", "rea_quille"))
+        if current_sky not in sky_modes:
+            current_sky = "rea_quille"
+        environment["sky_model"] = st.selectbox(
+            "Modelo de temperatura efectiva del cielo",
+            sky_modes,
+            index=sky_modes.index(current_sky),
+            format_func=lambda x: sky_labels[x],
+        )
+        if environment["sky_model"] == "rea_quille":
+            environment["dew_point_C"] = st.number_input(
+                "Temperatura de punto de rocío Tdp (°C)",
+                value=float(environment.get("dew_point_C", 20.0)),
+                step=0.5,
+                help="Entrada del Type15-3 en Rea Quille. Las tablas mensuales del TCC no publican Tdp; en los presets se marca como hipótesis cuando no está disponible.",
+            )
+            environment["cloud_adjustment"] = st.checkbox(
+                "Aplicar corrección por nubosidad (Ec. 13)",
+                value=bool(environment.get("cloud_adjustment", False)),
+            )
+            if environment["cloud_adjustment"]:
+                environment["cloud_factor"] = st.number_input(
+                    "Factor de nubosidad f_nuvem",
+                    min_value=0.0, max_value=1.0,
+                    value=float(environment.get("cloud_factor", 0.0)), step=0.05,
+                )
+                environment["cloud_emissivity"] = st.number_input(
+                    "Emisividad de nube ε_nuvem",
+                    min_value=0.0, max_value=1.5,
+                    value=float(environment.get("cloud_emissivity", 1.0)), step=0.05,
+                )
+                formula_labels = {
+                    "rea_quille_impresa": "Ec. (13) impresa: ε = ε0 + (1 + ε0)·f·εnube",
+                    "variante_fisica": "Sensibilidad: ε = ε0 + (1 - ε0)·f·εnube",
+                }
+                formula_keys = list(formula_labels.keys())
+                current_formula = str(environment.get("cloud_formula", "rea_quille_impresa"))
+                if current_formula not in formula_keys:
+                    current_formula = "rea_quille_impresa"
+                environment["cloud_formula"] = st.selectbox(
+                    "Convención para la Ec. (13)", formula_keys,
+                    index=formula_keys.index(current_formula),
+                    format_func=lambda x: formula_labels[x],
+                )
+                if environment["cloud_formula"] == "rea_quille_impresa":
+                    st.warning(
+                        "El TCC imprime (1 + ε0) en la Ec. (13), pero el texto también afirma que f_nuvem=0 representa cielo totalmente nublado. Ambas afirmaciones no son mutuamente consistentes. La app conserva la ecuación impresa sin corregirla silenciosamente."
+                    )
+        else:
+            environment["sky_delta_K"] = st.number_input(
+                "Tamb - Tsky (K)", min_value=0.0,
+                value=float(environment.get("sky_delta_K", 6.0)), step=0.5
+            )
+
         environment["wind_m_s"] = st.number_input("Viento (m/s)", min_value=0.0, value=float(environment["wind_m_s"]), step=0.1)
         environment["pressure_Pa"] = st.number_input("Presión ambiente (Pa)", min_value=1000.0, value=float(environment["pressure_Pa"]), step=100.0)
         t_start_h = st.number_input("Hora inicial LAT", value=float(operation["t_start_s"] / 3600.0), step=0.5)
@@ -729,6 +788,30 @@ with tab_props:
             )
     except Exception as exc:
         st.error(f"No fue posible construir el diagnóstico diario de irradiación: {exc}")
+
+    st.divider()
+    st.subheader("Temperatura efectiva del cielo")
+    try:
+        t0 = float(cfg["operation"]["t_start_s"])
+        t1 = float(cfg["operation"]["t_end_s"])
+        tm = 0.5 * (t0 + t1)
+        sky_start = effective_sky_temperature(t0, cfg["environment"])
+        sky_mid = effective_sky_temperature(tm, cfg["environment"])
+        sky_end = effective_sky_temperature(t1, cfg["environment"])
+        sky_cols = st.columns(4)
+        sky_cols[0].metric("T cielo · inicio", f"{sky_start['Tsky_K'] - 273.15:.2f} °C")
+        sky_cols[1].metric("T cielo · medio", f"{sky_mid['Tsky_K'] - 273.15:.2f} °C")
+        sky_cols[2].metric("T cielo · final", f"{sky_end['Tsky_K'] - 273.15:.2f} °C")
+        sky_cols[3].metric("ε cielo · medio", f"{sky_mid['eps_sky']:.4f}")
+        if str(cfg["environment"].get("sky_model", "delta_constante")) == "rea_quille":
+            st.caption(
+                "Modelo de Rea Quille / Martin-Berdahl: ε0 depende de Tdp, hora y presión; "
+                "Tsky = ε_sky^0.25·Tamb. La corrección por nubosidad solo se aplica si está activada en Operación y ambiente."
+            )
+        else:
+            st.caption("Modo legado: Tsky = Tamb - ΔT constante.")
+    except Exception as exc:
+        st.error(f"No fue posible calcular la temperatura efectiva del cielo: {exc}")
 
     st.divider()
     st.subheader("Propiedades del fluido")

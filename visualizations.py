@@ -372,7 +372,7 @@ def thermal_resistance_network(
     q45 = q56 + q57
 
     tamb_c = float(environment["Tamb_K"]) - 273.15
-    tsky_c = tamb_c - float(environment["sky_delta_K"])
+    tsky_c = float(snapshot.get("Tsky_C", tamb_c - float(environment.get("sky_delta_K", 6.0))))
     temperatures = {
         1: float(snapshot["Tf_C"]),
         2: float(snapshot["Tabs_C"]),
@@ -521,7 +521,7 @@ def _thermal_resistance_network_without_glass(
     q36 = float(snapshot["Qconv_external_W"])
     q37 = float(snapshot["Qrad_sky_W"])
     tamb_c = float(environment["Tamb_K"]) - 273.15
-    tsky_c = tamb_c - float(environment["sky_delta_K"])
+    tsky_c = float(snapshot.get("Tsky_C", tamb_c - float(environment.get("sky_delta_K", 6.0))))
 
     fig = go.Figure()
     x1, x2, x3, x_end = 0.05, 0.22, 0.40, 0.94
