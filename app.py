@@ -19,6 +19,7 @@ from validations import prototype_tcc_table, validate_bhambare, validate_tcc_mon
 from visualizations import (
     axial_profiles,
     comparative_overview,
+    daily_irradiance_histogram,
     dynamic_overview,
     node_balance,
     property_figure,
@@ -140,6 +141,66 @@ def active_result_selector(location: str) -> tuple[str | None, SimulationResult 
     labels = list(results.keys())
     label = st.selectbox("Escenario mostrado", labels, key=f"scenario_{location}")
     return label, results[label]
+
+
+def _format_lat_hour(hour: float | None) -> str:
+    if hour is None or not np.isfinite(hour):
+        return "—"
+    total_minutes = int(round(float(hour) * 60.0))
+    total_minutes = max(0, min(total_minutes, 24 * 60))
+    if total_minutes == 24 * 60:
+        return "24:00"
+    return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+
+
+def daily_solar_diagnostics(config: dict[str, Any], fluid_database: dict[str, Any]) -> dict[str, Any]:
+    """Evalúa el modelo solar seleccionado durante un día LAT completo.
+
+    Se usan 1440 intervalos de un minuto, evaluados en su punto medio. La
+    tarjeta de horas de sol representa las horas para las que el propio modelo
+    entrega DNI > 1 W/m². No es una medición meteorológica externa.
+    """
+    simulator = PTCSimulator(deepcopy(config), deepcopy(fluid_database))
+    minute_index = np.arange(24 * 60, dtype=int)
+    lat_h = (minute_index + 0.5) / 60.0
+    solar_rows = [simulator.solar_model(float(hour * 3600.0)) for hour in lat_h]
+
+    dni = np.asarray([row["DNI_W_m2"] for row in solar_rows], dtype=float)
+    cos_theta = np.asarray([row["cosTheta"] for row in solar_rows], dtype=float)
+    beam_aperture = dni * np.clip(cos_theta, 0.0, 1.0)
+    sun_mask = np.isfinite(dni) & (dni > 1.0)
+
+    sun_minutes = int(np.count_nonzero(sun_mask))
+    sun_hours = sun_minutes / 60.0
+    dni_daily_kWh_m2 = float(np.nansum(np.where(np.isfinite(dni), dni, 0.0))) / 60.0 / 1000.0
+    beam_daily_kWh_m2 = float(np.nansum(np.where(np.isfinite(beam_aperture), beam_aperture, 0.0))) / 60.0 / 1000.0
+
+    if sun_minutes:
+        lit = np.flatnonzero(sun_mask)
+        sunrise_h = float(lit[0]) / 60.0
+        sunset_h = float(lit[-1] + 1) / 60.0
+    else:
+        sunrise_h = None
+        sunset_h = None
+
+    hourly = pd.DataFrame(
+        {
+            "hour": np.arange(24, dtype=int),
+            "hour_label": [f"{h:02d}–{h + 1:02d}" for h in range(24)],
+            "DNI_mean_W_m2": np.nanmean(dni.reshape(24, 60), axis=1),
+            "beam_on_aperture_mean_W_m2": np.nanmean(beam_aperture.reshape(24, 60), axis=1),
+        }
+    )
+
+    return {
+        "sun_hours": sun_hours,
+        "sunrise_h": sunrise_h,
+        "sunset_h": sunset_h,
+        "DNI_max_W_m2": float(np.nanmax(dni)) if np.any(np.isfinite(dni)) else np.nan,
+        "DNI_daily_kWh_m2": dni_daily_kWh_m2,
+        "beam_daily_kWh_m2": beam_daily_kWh_m2,
+        "hourly": hourly,
+    }
 
 
 def representative_time_index(result: SimulationResult) -> tuple[int, str]:
@@ -487,6 +548,39 @@ with tab_nodes:
         )
 
 with tab_props:
+    st.subheader("Irradiación diaria del modelo")
+    st.caption(
+        "Diagnóstico de 00:00 a 24:00 LAT calculado directamente con el modelo de irradiación seleccionado. "
+        "Las horas de sol son las horas en que el modelo entrega DNI > 1 W/m²."
+    )
+    try:
+        solar_day = daily_solar_diagnostics(cfg, fluid_db)
+        solar_cols = st.columns(4)
+        solar_cols[0].metric("Horas de sol", f"{solar_day['sun_hours']:.2f} h")
+        solar_cols[1].metric("DNI máximo", f"{solar_day['DNI_max_W_m2']:.1f} W/m²")
+        solar_cols[2].metric("DNI diario", f"{solar_day['DNI_daily_kWh_m2']:.2f} kWh/m²")
+        if solar_day["sunrise_h"] is None:
+            solar_window = "Sin irradiación"
+        else:
+            solar_window = f"{_format_lat_hour(solar_day['sunrise_h'])} – {_format_lat_hour(solar_day['sunset_h'])}"
+        solar_cols[3].metric("Ventana solar LAT", solar_window)
+        st.plotly_chart(daily_irradiance_histogram(solar_day["hourly"]), use_container_width=True)
+        st.caption(
+            f"Energía diaria proyectada sobre la apertura antes de pérdidas ópticas: "
+            f"{solar_day['beam_daily_kWh_m2']:.2f} kWh/m². "
+            "La barra es el DNI medio de cada hora y la línea representa DNI·cos(theta)."
+        )
+        if str(cfg["solar"]["mode"]).lower() == "constante":
+            st.info(
+                "En modo DNI y ángulo constantes no existe amanecer/ocaso dentro de la formulación: "
+                "el valor constante se aplica a cualquier hora evaluada. Por eso, si DNI > 1 W/m², "
+                "el diagnóstico diario muestra 24 h de sol. Esto permite identificar claramente la "
+                "diferencia entre una hipótesis constante y un modelo solar horario."
+            )
+    except Exception as exc:
+        st.error(f"No fue posible construir el diagnóstico diario de irradiación: {exc}")
+
+    st.divider()
     st.subheader("Propiedades del fluido")
     fluid_key = st.selectbox("Fluido a editar", list(fluid_db.keys()), key="fluid_editor")
     spec = fluid_db[fluid_key]

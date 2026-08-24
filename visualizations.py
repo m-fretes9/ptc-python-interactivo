@@ -12,6 +12,39 @@ from plotly.subplots import make_subplots
 from ptc_model import SimulationResult
 
 
+def daily_irradiance_histogram(hourly: pd.DataFrame) -> go.Figure:
+    """Histograma horario del DNI y de la componente proyectada sobre la apertura."""
+    figure = go.Figure()
+    figure.add_trace(
+        go.Bar(
+            x=hourly["hour_label"],
+            y=hourly["DNI_mean_W_m2"],
+            name="DNI medio",
+            hovertemplate="%{x}<br>DNI medio = %{y:.1f} W/m²<extra></extra>",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=hourly["hour_label"],
+            y=hourly["beam_on_aperture_mean_W_m2"],
+            mode="lines+markers",
+            name="DNI · cos(theta)",
+            hovertemplate="%{x}<br>Sobre apertura = %{y:.1f} W/m²<extra></extra>",
+        )
+    )
+    figure.update_layout(
+        height=430,
+        title="Histograma diario de irradiación directa",
+        xaxis_title="Hora LAT",
+        yaxis_title="Irradiancia (W/m²)",
+        hovermode="x unified",
+        bargap=0.16,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+    )
+    figure.update_xaxes(tickangle=-45)
+    return figure
+
+
 def dynamic_overview(result: SimulationResult) -> go.Figure:
     figure = make_subplots(
         rows=3,
