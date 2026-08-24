@@ -53,6 +53,11 @@ def initialize_state() -> None:
         st.session_state.loaded_package_name = None
 
 
+def integrate_trapezoid(y: np.ndarray, x: np.ndarray) -> float:
+    """Integra por la regla trapezoidal con NumPy 2.x / Python 3.14."""
+    return float(np.trapezoid(y, x))
+
+
 def json_ready(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): json_ready(item) for key, item in value.items()}
@@ -439,8 +444,8 @@ with tab_sim:
         st.caption(kpi_caption)
         qinc = np.asarray(result.scalar_diag["Qincident_W"], dtype=float)
         quse = np.asarray(result.scalar_diag["Quseful_W"], dtype=float)
-        einc = float(np.trapz(qinc, result.t_s)) if len(result.t_s) > 1 else float("nan")
-        euse = float(np.trapz(quse, result.t_s)) if len(result.t_s) > 1 else float("nan")
+        einc = integrate_trapezoid(qinc, result.t_s) if len(result.t_s) > 1 else float("nan")
+        euse = integrate_trapezoid(quse, result.t_s) if len(result.t_s) > 1 else float("nan")
         eta_period = 100.0 * euse / einc if np.isfinite(einc) and einc > 0.0 else float("nan")
         re_out = float(result.node_diag["Re_internal"][k_ref, -1])
         re_lam = float(result.config["model"].get("Re_laminar_max", 2300.0))
