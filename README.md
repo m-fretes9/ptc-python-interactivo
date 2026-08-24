@@ -78,10 +78,12 @@ Desde VSCode también puede abrir **Run and Debug** y seleccionar **Ejecutar int
    - **Parishwad / cielo claro**;
    - **DNI y ángulo constantes**;
    - **Perfil horario editable**.
-3. En **Propiedades e irradiación**, edite la base del fluido:
-   - correlación original;
-   - tabla completa interpolada con PCHIP;
-   - propiedades constantes.
+3. En **Propiedades e irradiación** puede comparar el modelo solar seleccionado con:
+   - histograma horario del DNI medio;
+   - curva DNI·cos(theta) sobre la apertura;
+   - tarjeta de horas de sol del modelo (DNI > 1 W/m²);
+   - DNI máximo, energía DNI diaria y ventana solar LAT.
+   En la misma pestaña puede editar la base del fluido mediante correlación original, tabla completa interpolada con PCHIP o propiedades constantes.
 4. Pulse **Ejecutar simulación**.
 5. En **Nodo por nodo**, seleccione el tiempo y el volumen de control. La aplicación muestra:
    - temperaturas locales;
@@ -131,4 +133,13 @@ python tests\test_smoke.py
 
 La prueba ejecuta un caso corto sin abrir Streamlit.
 
+## Nota sobre equivalencia numérica
 
+Las ecuaciones, parámetros predeterminados y lógica de cálculo corresponden al MATLAB refactorizado. `ode15s` no existe en SciPy; se usa `solve_ivp(method="BDF")`, que pertenece a la misma familia de integradores implícitos para sistemas rígidos. Por ello, pequeñas diferencias numéricas son normales aunque el modelo físico sea el mismo.
+
+
+## Revisión de régimen para agua
+
+La versión actual evita una conmutación abrupta de Nusselt en Re=2300. En modo automático se usa Nu=4.36 en laminar, Gnielinski-Forristall en turbulento y una transición smoothstep continua entre los Reynolds configurables (2300 y 4000 por defecto). Esto elimina picos artificiales de h, temperatura y eficiencia cuando la viscosidad del agua hace cruzar el umbral durante el día.
+
+La interfaz muestra además η térmica del HTF, η óptica al absorbedor y η integrada del período. Una η térmica instantánea cercana a 60 % puede ser físicamente válida cuando el producto óptico ronda 65 % y las pérdidas son pequeñas.

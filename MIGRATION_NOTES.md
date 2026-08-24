@@ -30,3 +30,11 @@
 ## Corrección conservada en la migración
 
 La variable `PrWall` pertenece exclusivamente a la convección interna. La función de convección externa no la calcula ni la utiliza.
+
+
+## Revisión 2026-08-24: agua y transición de Reynolds
+
+- Se eliminó el salto discontinuo Nu=4.36 -> Gnielinski en Re=2300.
+- La zona 2300-4000 usa mezcla smoothstep configurable.
+- Se agregaron eta_optical_abs_pct, eta_balance_pct, Qstorage_est_W y transition_weight.
+- El dashboard muestra la eficiencia óptica como referencia para interpretar la eficiencia térmica del HTF.

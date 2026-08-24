@@ -173,6 +173,8 @@ def default_config() -> dict[str, Any]:
             "annulus_pressure_Pa": 0.1,
             "annulus_h_effective_W_m2K": 0.05,
             "internal_correlation": "automatica",
+            "Re_laminar_max": 2300.0,
+            "Re_turbulent_min": 4000.0,
             "include_supports": False,
             "support_loss_fraction": 0.015,
             "UL_area": "apertura",

@@ -120,6 +120,11 @@ class PTCSimulator:
             raise ValueError("El tiempo final debe ser mayor que el inicial.")
         if float(operation["output_step_s"]) <= 0.0:
             raise ValueError("El paso de salida debe ser positivo.")
+        model = self.cfg["model"]
+        re_lam = float(model.get("Re_laminar_max", 2300.0))
+        re_turb = float(model.get("Re_turbulent_min", 4000.0))
+        if re_lam <= 0.0 or re_turb <= re_lam:
+            raise ValueError("Debe cumplirse 0 < Re_laminar_max < Re_turbulent_min.")
 
     def simulate(self) -> SimulationResult:
         operation = self.cfg["operation"]
@@ -167,6 +172,9 @@ class PTCSimulator:
             "Quseful_W",
             "Qloss_W",
             "eta_pct",
+            "eta_optical_abs_pct",
+            "eta_balance_pct",
+            "Qstorage_est_W",
             "UL_W_m2K",
         ]
         node_names = [
@@ -184,6 +192,7 @@ class PTCSimulator:
             "Pr_wall",
             "Nu_internal",
             "h_internal_W_m2K",
+            "transition_weight",
             "h_external_W_m2K",
             "rho_kg_m3",
             "mu_Pa_s",
@@ -265,6 +274,7 @@ class PTCSimulator:
                 "Pr_wall",
                 "Nu_internal",
                 "h_internal_W_m2K",
+                "transition_weight",
                 "h_external_W_m2K",
                 "rho_kg_m3",
                 "mu_Pa_s",
@@ -301,6 +311,8 @@ class PTCSimulator:
                 prop,
                 prop_wall,
                 str(cfg["model"]["internal_correlation"]),
+                float(cfg["model"].get("Re_laminar_max", 2300.0)),
+                float(cfg["model"].get("Re_turbulent_min", 4000.0)),
             )
 
             Aint = np.pi * float(g["D2"]) * self.dx
@@ -450,6 +462,7 @@ class PTCSimulator:
             arrays["Pr_wall"][i] = conv_int["PrWall"]
             arrays["Nu_internal"][i] = conv_int["Nu"]
             arrays["h_internal_W_m2K"][i] = conv_int["h_W_m2K"]
+            arrays["transition_weight"][i] = conv_int["transition_weight"]
             arrays["rho_kg_m3"][i] = prop.rho
             arrays["mu_Pa_s"][i] = prop.mu
             arrays["Cp_J_kgK"][i] = prop.Cp
@@ -474,6 +487,19 @@ class PTCSimulator:
         )
         Qincident = float(solar["Qincident_W"])
         eta = 100.0 * Quseful / Qincident if Qincident > 1e-9 else np.nan
+        Qsolar_total = float(solar["QsolarAbs_W"]) + float(solar["QsolarGlass_W"])
+        eta_optical_abs = (
+            100.0 * float(solar["QsolarAbs_W"]) / Qincident
+            if Qincident > 1e-9 else np.nan
+        )
+        # Diagnóstico de balance: en régimen cuasiestacionario eta_balance ~= eta_HTF.
+        # La diferencia representa principalmente almacenamiento/liberación de energía
+        # en el HTF, absorbedor y vidrio durante los transitorios.
+        Qstorage_est = Qsolar_total - Qloss - Quseful
+        eta_balance = (
+            100.0 * (Qsolar_total - Qloss) / Qincident
+            if Qincident > 1e-9 else np.nan
+        )
 
         output: dict[str, Any] = {
             "dYdt": np.concatenate((arrays["dTf"], arrays["dTabs"], arrays["dTglass"])),
@@ -481,6 +507,9 @@ class PTCSimulator:
             "Quseful_W": Quseful,
             "Qloss_W": Qloss,
             "eta_pct": eta,
+            "eta_optical_abs_pct": eta_optical_abs,
+            "eta_balance_pct": eta_balance,
+            "Qstorage_est_W": Qstorage_est,
             "UL_W_m2K": UL,
             "Qsolar_abs_node_W": np.full(n, q_solar_abs_node),
             "Qsolar_glass_node_W": np.full(n, q_solar_glass_node),
@@ -622,36 +651,79 @@ def internal_convection(
     prop: FluidProperties,
     prop_wall: FluidProperties,
     mode: str,
+    re_laminar_max: float = 2300.0,
+    re_turbulent_min: float = 4000.0,
 ) -> dict[str, Any]:
+    """Coeficiente convectivo interno con transición continua de régimen.
+
+    El modelo anterior conmutaba de Nu=4.36 a Gnielinski exactamente en
+    Re=2300. Esa discontinuidad en Nu y h producía picos artificiales cuando
+    la viscosidad dependiente de T hacía cruzar el umbral durante el día.
+
+    En modo automático/Gnielinski se usa Nu=4.36 hasta re_laminar_max,
+    Gnielinski a partir de re_turbulent_min y una mezcla smoothstep entre
+    ambos en la zona de transición. Dittus-Boelter forzado conserva su
+    comportamiento explícito para estudios de sensibilidad.
+    """
     Re = 4.0 * mdot / (np.pi * diameter_m * prop.mu)
     Pr = prop.Pr
     Pr_wall = prop_wall.Pr
     normalized_mode = mode.lower()
-    forced_db = normalized_mode == "dittusboelter_forzado"
-    if Re < 2300.0 and not forced_db:
-        Nu = 4.36
-        correlation = "Laminar Nu=4.36"
-    elif normalized_mode in {"dittusboelter", "dittusboelter_forzado"}:
-        Nu = 0.023 * max(Re, 1.0) ** 0.8 * max(Pr, 0.1) ** 0.4
-        Nu = max(Nu, 4.36)
-        correlation = "Dittus-Boelter"
-    else:
-        friction = (1.82 * np.log10(max(Re, 2301.0)) - 1.64) ** -2
-        Nu = (
+    re_lam = float(re_laminar_max)
+    re_turb = float(re_turbulent_min)
+    if re_lam <= 0.0 or re_turb <= re_lam:
+        raise ValueError("Debe cumplirse 0 < re_laminar_max < re_turbulent_min.")
+
+    def _smoothstep_weight(reynolds: float) -> float:
+        x = float(np.clip((reynolds - re_lam) / (re_turb - re_lam), 0.0, 1.0))
+        return x * x * (3.0 - 2.0 * x)
+
+    def _dittus_boelter_nu(reynolds: float) -> float:
+        return max(0.023 * max(reynolds, 1.0) ** 0.8 * max(Pr, 0.1) ** 0.4, 4.36)
+
+    def _gnielinski_nu(reynolds: float) -> float:
+        friction = (1.82 * np.log10(max(reynolds, 2301.0)) - 1.64) ** -2
+        value = (
             (friction / 8.0)
-            * (Re - 1000.0)
+            * (reynolds - 1000.0)
             * Pr
             / (1.0 + 12.7 * np.sqrt(friction / 8.0) * (Pr ** (2.0 / 3.0) - 1.0))
             * (Pr / max(Pr_wall, np.finfo(float).eps)) ** 0.11
         )
-        Nu = max(Nu, 4.36)
-        correlation = "Gnielinski-Forristall"
+        return max(float(value), 4.36)
+
+    if normalized_mode == "dittusboelter_forzado":
+        Nu = _dittus_boelter_nu(Re)
+        weight = 1.0
+        correlation = "Dittus-Boelter forzado"
+    elif Re <= re_lam:
+        Nu = 4.36
+        weight = 0.0
+        correlation = "Laminar Nu=4.36"
+    elif normalized_mode == "dittusboelter":
+        weight = _smoothstep_weight(Re)
+        Nu_turb = _dittus_boelter_nu(Re)
+        Nu = (1.0 - weight) * 4.36 + weight * Nu_turb
+        correlation = (
+            "Transicion suave laminar-Dittus-Boelter"
+            if Re < re_turb else "Dittus-Boelter"
+        )
+    else:
+        weight = _smoothstep_weight(Re)
+        Nu_turb = _gnielinski_nu(Re)
+        Nu = (1.0 - weight) * 4.36 + weight * Nu_turb
+        correlation = (
+            "Transicion suave laminar-Gnielinski"
+            if Re < re_turb else "Gnielinski-Forristall"
+        )
+
     return {
         "Re": float(Re),
         "Pr": float(Pr),
         "PrWall": float(Pr_wall),
         "Nu": float(Nu),
         "h_W_m2K": float(Nu * prop.k / diameter_m),
+        "transition_weight": float(weight),
         "correlation": correlation,
     }
 

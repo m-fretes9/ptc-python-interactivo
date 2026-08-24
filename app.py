@@ -356,6 +356,24 @@ with st.sidebar:
             correlation_options,
             index=correlation_options.index(model["internal_correlation"]),
         )
+        if model["internal_correlation"] != "dittusboelter_forzado":
+            re_cols = st.columns(2)
+            model["Re_laminar_max"] = re_cols[0].number_input(
+                "Fin de régimen laminar (Re)",
+                min_value=1.0,
+                value=float(model.get("Re_laminar_max", 2300.0)),
+                step=100.0,
+            )
+            model["Re_turbulent_min"] = re_cols[1].number_input(
+                "Inicio de régimen turbulento (Re)",
+                min_value=float(model["Re_laminar_max"]) + 1.0,
+                value=max(float(model.get("Re_turbulent_min", 4000.0)), float(model["Re_laminar_max"]) + 1.0),
+                step=100.0,
+            )
+            st.caption(
+                "Entre ambos Reynolds se interpola suavemente Nu para evitar saltos no físicos "
+                "al cruzar de laminar a transición/turbulento."
+            )
         model["include_supports"] = st.checkbox("Incluir pérdidas en soportes", value=bool(model["include_supports"]))
         if model["include_supports"]:
             model["support_loss_fraction"] = st.number_input(
@@ -417,8 +435,27 @@ with tab_sim:
         cols[2].metric("T absorbedor", f"{result.Tabs_mean_C[k_ref]:.2f} °C")
         cols[3].metric("Q útil", f"{result.scalar_diag['Quseful_W'][k_ref]:.1f} W")
         cols[4].metric("Q pérdidas", f"{result.scalar_diag['Qloss_W'][k_ref]:.1f} W")
-        cols[5].metric("Eficiencia", f"{result.scalar_diag['eta_pct'][k_ref]:.2f} %")
+        cols[5].metric("η térmica HTF", f"{result.scalar_diag['eta_pct'][k_ref]:.2f} %")
         st.caption(kpi_caption)
+        qinc = np.asarray(result.scalar_diag["Qincident_W"], dtype=float)
+        quse = np.asarray(result.scalar_diag["Quseful_W"], dtype=float)
+        einc = float(np.trapz(qinc, result.t_s)) if len(result.t_s) > 1 else float("nan")
+        euse = float(np.trapz(quse, result.t_s)) if len(result.t_s) > 1 else float("nan")
+        eta_period = 100.0 * euse / einc if np.isfinite(einc) and einc > 0.0 else float("nan")
+        re_out = float(result.node_diag["Re_internal"][k_ref, -1])
+        re_lam = float(result.config["model"].get("Re_laminar_max", 2300.0))
+        re_turb = float(result.config["model"].get("Re_turbulent_min", 4000.0))
+        regime = "laminar" if re_out <= re_lam else ("transición" if re_out < re_turb else "turbulento")
+        diag_cols = st.columns(4)
+        diag_cols[0].metric("η óptica al absorbedor", f"{result.scalar_diag['eta_optical_abs_pct'][k_ref]:.2f} %")
+        diag_cols[1].metric("η integrada del período", f"{eta_period:.2f} %")
+        diag_cols[2].metric("Re salida", f"{re_out:.0f}")
+        diag_cols[3].metric("Régimen salida", regime)
+        if regime == "transición":
+            st.info(
+                f"La salida está en régimen transicional ({re_lam:.0f} < Re < {re_turb:.0f}). "
+                "El modelo usa una transición continua de Nusselt; no una conmutación abrupta."
+            )
         if len(st.session_state.results) > 1:
             st.plotly_chart(comparative_overview(st.session_state.results), use_container_width=True)
         else:
@@ -496,6 +533,7 @@ with tab_nodes:
                         "Re",
                         "Pr",
                         "Nu",
+                        "Peso transición",
                         "h interno",
                         "rho",
                         "mu",
@@ -512,6 +550,7 @@ with tab_nodes:
                         snapshot["Re_internal"],
                         snapshot["Pr_internal"],
                         snapshot["Nu_internal"],
+                        snapshot["transition_weight"],
                         snapshot["h_internal_W_m2K"],
                         snapshot["rho_kg_m3"],
                         snapshot["mu_Pa_s"],
@@ -525,6 +564,7 @@ with tab_nodes:
                         "K/s",
                         "K/s",
                         "K/s",
+                        "-",
                         "-",
                         "-",
                         "-",

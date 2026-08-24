@@ -55,7 +55,7 @@ def dynamic_overview(result: SimulationResult) -> go.Figure:
             "Temperatura media del vidrio",
             "Ganancia útil",
             "Pérdidas térmicas",
-            "Eficiencia térmica",
+            "Eficiencia térmica HTF",
             "Coeficiente global U_L",
             "Reynolds interno a la salida",
             "h interno a la salida",
@@ -85,6 +85,19 @@ def dynamic_overview(result: SimulationResult) -> go.Figure:
         )
         figure.update_xaxes(title_text="LAT (h)", row=row, col=col)
         figure.update_yaxes(title_text=unit, row=row, col=col)
+    if "eta_optical_abs_pct" in result.scalar_diag:
+        figure.add_trace(
+            go.Scatter(
+                x=x,
+                y=result.scalar_diag["eta_optical_abs_pct"],
+                mode="lines",
+                name="η óptica al absorbedor",
+                line={"dash": "dash"},
+                showlegend=True,
+            ),
+            row=2,
+            col=3,
+        )
     figure.update_layout(height=900, title="Respuesta transitoria del PTC", hovermode="x unified")
     return figure
 
@@ -842,7 +855,7 @@ def comparative_overview(results: Mapping[str, SimulationResult]) -> go.Figure:
             "Temperatura media del vidrio",
             "Ganancia útil",
             "Pérdidas térmicas",
-            "Eficiencia térmica",
+            "Eficiencia térmica HTF",
             "Coeficiente global U_L",
             "Reynolds interno a la salida",
             "h interno a la salida",
@@ -879,6 +892,21 @@ def comparative_overview(results: Mapping[str, SimulationResult]) -> go.Figure:
             )
             figure.update_xaxes(title_text="LAT (h)", row=row, col=col)
             figure.update_yaxes(title_text=unit, row=row, col=col)
+    if results:
+        first_result = next(iter(results.values()))
+        if "eta_optical_abs_pct" in first_result.scalar_diag:
+            figure.add_trace(
+                go.Scatter(
+                    x=first_result.LAT_h,
+                    y=first_result.scalar_diag["eta_optical_abs_pct"],
+                    mode="lines",
+                    name="η óptica al absorbedor",
+                    line={"dash": "dash"},
+                    showlegend=True,
+                ),
+                row=2,
+                col=3,
+            )
     figure.update_layout(
         height=900,
         title="Comparación de escenarios del PTC",
