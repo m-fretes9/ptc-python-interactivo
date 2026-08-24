@@ -38,3 +38,7 @@ La variable `PrWall` pertenece exclusivamente a la convección interna. La funci
 - La zona 2300-4000 usa mezcla smoothstep configurable.
 - Se agregaron eta_optical_abs_pct, eta_balance_pct, Qstorage_est_W y transition_weight.
 - El dashboard muestra la eficiencia óptica como referencia para interpretar la eficiencia térmica del HTF.
+
+## 2026-08-24 — Presets de referencia
+
+Se añadió `presets.py` para evitar mezclar parámetros de Bhambare con el prototipo de Fiamonzini/Rea Quille. Los presets documentales cargan toda la configuración de una sola vez y guardan la referencia y los parámetros no publicados en `config["preset_meta"]`.

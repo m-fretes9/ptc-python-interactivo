@@ -143,3 +143,29 @@ Las ecuaciones, parámetros predeterminados y lógica de cálculo corresponden a
 La versión actual evita una conmutación abrupta de Nusselt en Re=2300. En modo automático se usa Nu=4.36 en laminar, Gnielinski-Forristall en turbulento y una transición smoothstep continua entre los Reynolds configurables (2300 y 4000 por defecto). Esto elimina picos artificiales de h, temperatura y eficiencia cuando la viscosidad del agua hace cruzar el umbral durante el día.
 
 La interfaz muestra además η térmica del HTF, η óptica al absorbedor y η integrada del período. Una η térmica instantánea cercana a 60 % puede ser físicamente válida cuando el producto óptico ronda 65 % y las pérdidas son pequeñas.
+
+---
+
+## Presets documentales (versión 2026-08-24)
+
+La barra lateral comienza ahora con **Preset documental**. Al pulsar **Aplicar preset completo** se sustituyen en conjunto geometría, materiales, fluido, caudal, temperaturas, irradiación, condiciones ambientales, modelo y solver.
+
+Presets disponibles:
+
+- **Rea Quille — prototipo Foz 23/10/2021**: geometría del prototipo de Fiamonzini, agua, `mdot=0.0192 kg/s`, `Tamb=25 °C`, DNI nominal `905 W/m²`, latitud `-25.43816°`, receptor sin vidrio. La Tabela 8 no publica `Tin`/`Tout` horarios; el preset deja `Tin=25 °C` como hipótesis explícita y editable y la validación Python se marca como exploratoria.
+- **Rea Quille — Foz do Iguaçu (Tabela 10)**: selector por mes o promedio anual. Cada fila carga `Tin`, `Tout_ref`, `Tamb`, DNI, caudal y eficiencia de referencia de la tabla.
+- **Rea Quille — Alvorada do Norte (Tabela 11)**: selector por mes o promedio anual con los valores tabulados y latitud `-14.600°`.
+- **Bhambare / Sukhatme — Pune 15/04**: geometría y óptica del artículo, Paratherm NF, `mdot=0.0986 kg/s`, `Tin=150 °C`, `Tamb=31.9 °C`, viento `5.3 m/s`, haz `705 W/m²`, receptor con vidrio y vacío ideal.
+
+### Importante: valores publicados vs supuestos
+
+Algunas magnitudes necesarias para nuestro balance nodal no están publicadas por Rea Quille (por ejemplo, reflectividad efectiva, factor de interceptación, viento mensual y temperatura efectiva del cielo). El programa **no las presenta como datos de la fuente**. Cada preset contiene un bloque `preset_meta.assumptions` y la interfaz los muestra en **Ver parámetros fijados y supuestos**.
+
+La pestaña **Validación** permite:
+
+1. validar el preset activo;
+2. ejecutar los 12 casos mensuales de Foz do Iguaçu;
+3. ejecutar los 12 casos mensuales de Alvorada do Norte;
+4. cargar la Tabela 8 experimental/TRNSYS del prototipo.
+
+En la pestaña **Simulación**, cuando el caso activo proviene de un preset, aparece también **Comparación rápida con la referencia del preset**.

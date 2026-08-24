@@ -712,46 +712,46 @@ def property_figure(curve: pd.DataFrame, fluid_name: str) -> go.Figure:
 
 
 def validation_tcc_figure(table: pd.DataFrame) -> go.Figure:
+    """Comparación mensual Rea Quille/TRNSYS vs modelo Python."""
     figure = make_subplots(
         rows=2,
         cols=2,
         subplot_titles=("Temperatura de salida", "Ganancia útil", "Eficiencia", "Errores relativos"),
     )
     x = table["Mes"]
-    for y, name in (("Tout_ref_C", "TCC/TRNSYS"), ("Tout_sim_C", "Modelo Python")):
+    cols = {
+        "tout_ref": "Tout_ref_C",
+        "tout_sim": "Tout_Python_C" if "Tout_Python_C" in table.columns else "Tout_sim_C",
+        "q_ref": "Qutil_ref_derivado_W" if "Qutil_ref_derivado_W" in table.columns else "Qutil_ref_W",
+        "q_sim": "Qutil_Python_W" if "Qutil_Python_W" in table.columns else "Qutil_sim_W",
+        "eta_ref": "Eta_ref_pct",
+        "eta_sim": "Eta_Python_pct" if "Eta_Python_pct" in table.columns else "Eta_sim_pct",
+    }
+    for y, name in ((cols["tout_ref"], "Rea Quille/TRNSYS"), (cols["tout_sim"], "Modelo Python")):
         figure.add_trace(go.Scatter(x=x, y=table[y], mode="lines+markers", name=name), row=1, col=1)
-    for y, name in (("Qutil_ref_W", "Derivado TCC"), ("Qutil_sim_W", "Modelo Python")):
+    for y, name in ((cols["q_ref"], "Derivado de la referencia"), (cols["q_sim"], "Modelo Python")):
         figure.add_trace(go.Scatter(x=x, y=table[y], mode="lines+markers", name=name), row=1, col=2)
-    for y, name in (("Eta_ref_pct", "TCC/TRNSYS"), ("Eta_sim_pct", "Modelo Python")):
+    for y, name in ((cols["eta_ref"], "Rea Quille/TRNSYS"), (cols["eta_sim"], "Modelo Python")):
         figure.add_trace(go.Scatter(x=x, y=table[y], mode="lines+markers", name=name), row=2, col=1)
-    for y, name in (
-        ("Err_Tout_pct", "Tout"),
-        ("Err_Qutil_pct", "Qutil"),
-        ("Err_Eta_pct", "eta"),
-    ):
+    for y, name in (("Err_Tout_pct", "Tout"), ("Err_Qutil_pct", "Qutil"), ("Err_Eta_pct", "eta")):
         figure.add_trace(go.Bar(x=x, y=table[y], name=name), row=2, col=2)
     figure.update_yaxes(title_text="°C", row=1, col=1)
     figure.update_yaxes(title_text="W", row=1, col=2)
     figure.update_yaxes(title_text="%", row=2, col=1)
     figure.update_yaxes(title_text="Error (%)", row=2, col=2)
-    figure.update_layout(height=760, title="Validación mensual TCC/TRNSYS", barmode="group")
+    figure.update_layout(height=760, title="Validación mensual Rea Quille / TRNSYS", barmode="group")
     return figure
 
 
 def validation_bhambare_figure(table: pd.DataFrame) -> go.Figure:
     reduced = table.iloc[:4].copy()
     figure = make_subplots(rows=1, cols=2, subplot_titles=("Comparación", "Error relativo"))
-    for column, name in (
-        ("Referencia", "Referencia"),
-        ("Modelo_articulo", "Modelo del artículo"),
-        ("Modelo_Python", "Modelo Python"),
-    ):
+    ref_col = "Referencia_Sukhatme" if "Referencia_Sukhatme" in table.columns else "Referencia"
+    art_col = "Modelo_Bhambare" if "Modelo_Bhambare" in table.columns else "Modelo_articulo"
+    err_col = "Error_vs_Sukhatme_pct" if "Error_vs_Sukhatme_pct" in table.columns else "Error_rel_pct"
+    for column, name in ((ref_col, "Sukhatme"), (art_col, "Bhambare"), ("Modelo_Python", "Modelo Python")):
         figure.add_trace(go.Bar(x=reduced["Magnitud"], y=reduced[column], name=name), row=1, col=1)
-    figure.add_trace(
-        go.Bar(x=table["Magnitud"], y=table["Error_rel_pct"], name="Error relativo"),
-        row=1,
-        col=2,
-    )
+    figure.add_trace(go.Bar(x=table["Magnitud"], y=table[err_col], name="Error relativo"), row=1, col=2)
     figure.update_yaxes(title_text="Valor", row=1, col=1)
     figure.update_yaxes(title_text="Error (%)", row=1, col=2)
     figure.update_layout(height=500, title="Validación Bhambare/Sukhatme", barmode="group")

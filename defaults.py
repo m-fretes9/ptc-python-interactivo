@@ -150,6 +150,7 @@ def default_config() -> dict[str, Any]:
             "B": 0.131,
             "day_of_year": 105,
             "latitude_deg": 18.53,
+            "longitude_deg": 73.85,
             "DNI_constant_W_m2": 705.0,
             "angle_constant_deg": 0.0,
             "profile": {

@@ -1,4 +1,10 @@
-"""Casos de comparación y validación reproducidos desde el código MATLAB."""
+"""Casos de comparación y validación contra las fuentes documentales.
+
+La regla central de este módulo es no ocultar lagunas de la fuente. Los presets
+pueden contener hipótesis necesarias para ejecutar nuestro modelo; esas hipótesis
+se reportan en ``preset_meta`` y las validaciones no las convierten en datos
+experimentales.
+"""
 
 from __future__ import annotations
 
@@ -9,43 +15,35 @@ import numpy as np
 import pandas as pd
 
 from fluid_properties import FluidPropertyEvaluator
-from ptc_model import PTCSimulator, SimulationResult
+from presets import (
+    MONTH_ABBR_ES,
+    REA_ALVORADA_MONTHLY,
+    REA_FOZ_MONTHLY,
+    REA_PROTOTYPE_HOURS,
+    build_bhambare_sukhatme_preset,
+    build_rea_monthly_preset,
+)
+from ptc_model import PTCSimulator
+
+
+def _relative_error(sim: float, ref: float) -> float:
+    if not np.isfinite(sim) or not np.isfinite(ref):
+        return float("nan")
+    return 100.0 * abs(sim - ref) / max(abs(ref), np.finfo(float).eps)
+
+
+def _nearest_index(values: np.ndarray, target: float) -> int:
+    return int(np.nanargmin(np.abs(np.asarray(values, dtype=float) - float(target))))
 
 
 def validate_bhambare(
-    base_config: Mapping[str, Any],
+    base_config: Mapping[str, Any] | None,
     fluid_database: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    cfg = deepcopy(base_config)
-    cfg["geometry"]["Nseg"] = 12
-    cfg["operation"].update(
-        {
-            "name": "Validación Bhambare/Sukhatme",
-            "fluid": "ParathermNF",
-            "mdot": 0.0986,
-            "Tin_K": 150.0 + 273.15,
-            "t_start_s": 0.0,
-            "t_end_s": 8.0 * 3600.0,
-            "output_step_s": 120.0,
-        }
-    )
-    cfg["environment"].update({"Tamb_K": 31.9 + 273.15, "wind_m_s": 5.3})
-    cfg["solar"].update(
-        {
-            "mode": "constante",
-            "DNI_constant_W_m2": 705.0,
-            "angle_constant_deg": 0.0,
-        }
-    )
-    cfg["model"].update(
-        {
-            "has_glass": True,
-            "annulus": "vacio_ideal",
-            "internal_correlation": "dittusboelter_forzado",
-        }
-    )
-    cfg["solver"]["max_step_s"] = 20.0
-
+    """Reproduce el caso de validación Bhambare/Sukhatme con el preset completo."""
+    # El preset define la configuración documental completa. Se usa la base de
+    # propiedades recibida para que el usuario pueda estudiar sensibilidad.
+    cfg, _ = build_bhambare_sukhatme_preset()
     result = PTCSimulator(cfg, fluid_database).simulate()
     k = len(result.t_s) - 1
 
@@ -88,84 +86,67 @@ def validate_bhambare(
     table = pd.DataFrame(
         {
             "Magnitud": names,
-            "Referencia": reference,
-            "Modelo_articulo": article_model,
+            "Referencia_Sukhatme": reference,
+            "Modelo_Bhambare": article_model,
             "Modelo_Python": simulation,
-            "Error_rel_pct": error_pct,
+            "Error_vs_Sukhatme_pct": error_pct,
         }
     )
     return {
         "table": table,
         "result": result,
-        "note": "Q_util y eta de referencia se derivan de Tout, mdot y Cp(T); no están tabulados directamente.",
+        "config": cfg,
+        "note": (
+            "Q_util y eta de Sukhatme se derivan de Tout, mdot y Cp(T), porque no están tabulados directamente. "
+            "El preset interpreta Ib=705 W/m² como irradiancia efectiva constante sobre la apertura para obtener un estado comparable."
+        ),
     }
 
 
-def validate_tcc_monthly(
-    base_config: Mapping[str, Any],
+def validate_rea_quille_city_monthly(
+    city: str,
     fluid_database: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
-    Tin_C = np.array([34.73, 34.06, 34.17, 34.02, 32.89, 32.71, 32.31, 33.07, 31.74, 32.57, 34.60, 34.92])
-    Tout_ref_C = np.array([41.95, 40.91, 41.25, 40.71, 38.57, 38.11, 37.57, 38.46, 36.07, 38.25, 41.96, 42.48])
-    Tamb_C = np.array([27.46, 25.13, 24.27, 24.56, 20.24, 18.79, 17.14, 17.80, 18.33, 23.93, 24.12, 25.83])
-    DNI = np.array([252.38, 224.26, 228.56, 224.70, 174.61, 164.10, 146.87, 181.28, 120.74, 157.03, 247.59, 262.18])
-    mdot = np.array([0.0087, 0.0080, 0.0082, 0.0076, 0.0063, 0.0065, 0.0060, 0.0067, 0.0054, 0.0064, 0.0087, 0.0090])
-    eta_ref_pct = np.array([47.63, 46.25, 48.14, 43.04, 38.97, 40.55, 40.54, 37.98, 36.50, 43.86, 49.25, 49.41])
+    """Ejecuta los 12 presets mensuales de Rea Quille para una ciudad."""
+    city_key = city.strip().lower()
+    if city_key.startswith("foz"):
+        data = REA_FOZ_MONTHLY
+        city_name = "Foz do Iguaçu"
+    elif city_key.startswith("alvorada"):
+        data = REA_ALVORADA_MONTHLY
+        city_name = "Alvorada do Norte"
+    else:
+        raise ValueError(f"Ciudad no soportada: {city}")
 
-    Tout_sim_C = np.full(12, np.nan)
-    Quseful_sim_W = np.full(12, np.nan)
-    Qloss_sim_W = np.full(12, np.nan)
-    eta_sim_pct = np.full(12, np.nan)
-    Quseful_ref_W = np.full(12, np.nan)
+    n = 12
+    Tout_sim_C = np.full(n, np.nan)
+    Quseful_sim_W = np.full(n, np.nan)
+    Qloss_sim_W = np.full(n, np.nan)
+    eta_sim_pct = np.full(n, np.nan)
+    Quseful_ref_W = np.full(n, np.nan)
     water = FluidPropertyEvaluator("Agua", fluid_database)
 
-    for m in range(12):
-        cfg = deepcopy(base_config)
-        cfg["geometry"].update(
-            {
-                "W": 1.10,
-                "L": 2.00,
-                "f": 0.16,
-                "D2": 0.039,
-                "D3": 0.042,
-                "D4": 0.050,
-                "D5": 0.055,
-                "Nseg": 10,
-            }
-        )
-        cfg["materials"]["absorber"].update({"alpha": 0.97, "eps": 0.90})
-        cfg["optics"].update({"reflectivity": 0.85, "intercept_factor": 0.95})
-        cfg["model"].update({"has_glass": False, "internal_correlation": "automatica"})
-        cfg["operation"].update(
-            {
-                "name": f"TCC mensual - {months[m]}",
-                "fluid": "Agua",
-                "mdot": float(mdot[m]),
-                "Tin_K": float(Tin_C[m] + 273.15),
-                "t_start_s": 0.0,
-                "t_end_s": 4.0 * 3600.0,
-                "output_step_s": 120.0,
-            }
-        )
-        cfg["environment"].update({"Tamb_K": float(Tamb_C[m] + 273.15), "wind_m_s": 1.0})
-        cfg["solar"].update(
-            {
-                "mode": "constante",
-                "DNI_constant_W_m2": float(DNI[m]),
-                "angle_constant_deg": 0.0,
-            }
-        )
-        cfg["solver"]["max_step_s"] = 20.0
-
+    for i in range(n):
+        cfg, _ = build_rea_monthly_preset(city_name, i + 1)
         result = PTCSimulator(cfg, fluid_database).simulate()
         k = len(result.t_s) - 1
-        Tout_sim_C[m] = result.Tout_C[k]
-        Quseful_sim_W[m] = result.scalar_diag["Quseful_W"][k]
-        Qloss_sim_W[m] = result.scalar_diag["Qloss_W"][k]
-        eta_sim_pct[m] = result.scalar_diag["eta_pct"][k]
-        prop_ref = water(0.5 * (Tin_C[m] + Tout_ref_C[m]) + 273.15)
-        Quseful_ref_W[m] = mdot[m] * prop_ref.Cp * (Tout_ref_C[m] - Tin_C[m])
+        Tout_sim_C[i] = result.Tout_C[k]
+        Quseful_sim_W[i] = result.scalar_diag["Quseful_W"][k]
+        Qloss_sim_W[i] = result.scalar_diag["Qloss_W"][k]
+        eta_sim_pct[i] = result.scalar_diag["eta_pct"][k]
+        prop_ref = water(0.5 * (data["Tin_C"][i] + data["Tout_ref_C"][i]) + 273.15)
+        Quseful_ref_W[i] = (
+            data["mdot_kg_s"][i]
+            * prop_ref.Cp
+            * (data["Tout_ref_C"][i] - data["Tin_C"][i])
+        )
+
+    Tin_C = np.asarray(data["Tin_C"], dtype=float)
+    Tout_ref_C = np.asarray(data["Tout_ref_C"], dtype=float)
+    Tamb_C = np.asarray(data["Tamb_C"], dtype=float)
+    DNI = np.asarray(data["DNI_W_m2"], dtype=float)
+    mdot = np.asarray(data["mdot_kg_s"], dtype=float)
+    eta_ref_pct = np.asarray(data["eta_ref_pct"], dtype=float)
 
     err_Tout_pct = 100.0 * np.abs(Tout_sim_C - Tout_ref_C) / np.maximum(np.abs(Tout_ref_C), np.finfo(float).eps)
     err_Quseful_pct = 100.0 * np.abs(Quseful_sim_W - Quseful_ref_W) / np.maximum(np.abs(Quseful_ref_W), np.finfo(float).eps)
@@ -173,19 +154,20 @@ def validate_tcc_monthly(
 
     table = pd.DataFrame(
         {
-            "Mes": months,
+            "Mes": MONTH_ABBR_ES,
             "Tin_C": Tin_C,
             "Tout_ref_C": Tout_ref_C,
-            "Tout_sim_C": Tout_sim_C,
+            "Tout_Python_C": Tout_sim_C,
             "Err_Tout_pct": err_Tout_pct,
             "Tamb_C": Tamb_C,
-            "DNI_W_m2": DNI,
-            "mdot_kg_s": mdot,
-            "Qutil_ref_W": Quseful_ref_W,
-            "Qutil_sim_W": Quseful_sim_W,
-            "Qloss_sim_W": Qloss_sim_W,
+            "DNI_ref_W_m2": DNI,
+            "mdot_ref_kg_s": mdot,
+            "Qutil_ref_derivado_W": Quseful_ref_W,
+            "Qutil_Python_W": Quseful_sim_W,
+            "Qloss_Python_W": Qloss_sim_W,
             "Eta_ref_pct": eta_ref_pct,
-            "Eta_sim_pct": eta_sim_pct,
+            "Eta_Python_pct": eta_sim_pct,
+            "Diferencia_eta_pp": eta_sim_pct - eta_ref_pct,
             "Err_Qutil_pct": err_Quseful_pct,
             "Err_Eta_pct": err_eta_pct,
         }
@@ -194,18 +176,32 @@ def validate_tcc_monthly(
         "MAPE_Tout_pct": float(np.mean(err_Tout_pct)),
         "MAPE_Qutil_pct": float(np.mean(err_Quseful_pct)),
         "MAPE_eta_pct": float(np.mean(err_eta_pct)),
+        "Bias_eta_pp": float(np.mean(eta_sim_pct - eta_ref_pct)),
     }
     return {
         "table": table,
         "metrics": metrics,
-        "note": "La Tabla 10 suministra promedios mensuales; cada mes se modela como estado cuasiestacionario.",
+        "city": city_name,
+        "note": (
+            "Rea Quille publica promedios mensuales, no días ni series horarias de entrada para estas Tablas. "
+            "Cada fila se ejecuta como un estado cuasiestacionario con Tin, Tamb, irradiación y mdot exactamente tabulados. "
+            "Viento, pérdidas de cielo y parámetros ópticos no publicados permanecen como hipótesis explícitas del preset; por eso esta comparación diagnostica también esas lagunas."
+        ),
     }
 
 
+def validate_tcc_monthly(
+    base_config: Mapping[str, Any] | None,
+    fluid_database: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Alias histórico: validación mensual de Foz do Iguaçu (Tabela 10)."""
+    return validate_rea_quille_city_monthly("Foz do Iguaçu", fluid_database)
+
+
 def prototype_tcc_table() -> dict[str, Any]:
-    hours = np.arange(9, 17)
-    eta_exp = np.array([28.70, 34.40, 26.51, 30.06, 27.50, 30.01, 28.60, 27.10])
-    eta_trnsys = np.array([27.400, 27.300, 26.500, 26.200, 35.300, 32.900, 32.100, 30.000])
+    hours = np.asarray(REA_PROTOTYPE_HOURS["hours"], dtype=int)
+    eta_exp = np.asarray(REA_PROTOTYPE_HOURS["eta_exp_pct"], dtype=float)
+    eta_trnsys = np.asarray(REA_PROTOTYPE_HOURS["eta_trnsys_pct"], dtype=float)
     difference_pp = np.abs(eta_trnsys - eta_exp)
     error_relative_pct = 100.0 * difference_pp / np.maximum(np.abs(eta_exp), np.finfo(float).eps)
     rmse = float(np.sqrt(np.mean((eta_trnsys - eta_exp) ** 2)))
@@ -213,6 +209,7 @@ def prototype_tcc_table() -> dict[str, Any]:
     table = pd.DataFrame(
         {
             "Hora": [f"{hour:02d}:00" for hour in hours],
+            "mdot_kg_s": np.asarray(REA_PROTOTYPE_HOURS["mdot_kg_s"], dtype=float),
             "Eta_experimental_pct": eta_exp,
             "Eta_TRNSYS_pct": eta_trnsys,
             "Diferencia_pp": difference_pp,
@@ -223,5 +220,99 @@ def prototype_tcc_table() -> dict[str, Any]:
         "table": table,
         "RMSE_pp": rmse,
         "MAPE_pct": mape,
-        "note": "No se fuerza una simulación propia porque la fuente no informa Tin por hora.",
+        "eta_exp_mean_pct": float(np.mean(eta_exp)),
+        "eta_trnsys_mean_pct": float(np.mean(eta_trnsys)),
+        "note": (
+            "La Tabela 8 no publica Tin ni Tout por hora. Por ello estos vectores son referencia experimental/TRNSYS, "
+            "pero no bastan para una validación Python estricta del balance m*Cp*(Tout-Tin)."
+        ),
     }
+
+
+def validate_active_preset(
+    config: Mapping[str, Any],
+    fluid_database: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Compara la configuración activa con la referencia asociada a su preset."""
+    cfg = deepcopy(config)
+    meta = cfg.get("preset_meta") or {}
+    family = str(meta.get("family", ""))
+    reference = meta.get("reference") or {}
+    if not reference:
+        raise ValueError("El caso activo no contiene una referencia documental asociada.")
+
+    # Bhambare tiene una tabla multivariable específica.
+    if family == "Bhambare / Sukhatme":
+        return {"kind": "bhambare", **validate_bhambare(cfg, fluid_database)}
+
+    result = PTCSimulator(cfg, fluid_database).simulate()
+    k = len(result.t_s) - 1
+
+    if family == "Rea Quille / Fiamonzini prototipo":
+        hours = np.asarray(REA_PROTOTYPE_HOURS["hours"], dtype=float)
+        eta_exp = np.asarray(REA_PROTOTYPE_HOURS["eta_exp_pct"], dtype=float)
+        eta_trnsys = np.asarray(REA_PROTOTYPE_HOURS["eta_trnsys_pct"], dtype=float)
+        eta_python = np.full_like(hours, np.nan, dtype=float)
+        for i, hour in enumerate(hours):
+            idx = _nearest_index(result.LAT_h, hour)
+            eta_python[i] = float(result.scalar_diag["eta_pct"][idx])
+        table = pd.DataFrame(
+            {
+                "Hora": [f"{int(h):02d}:00" for h in hours],
+                "Eta_experimental_pct": eta_exp,
+                "Eta_TRNSYS_pct": eta_trnsys,
+                "Eta_Python_con_Tin_asumida_pct": eta_python,
+                "Python_minus_exp_pp": eta_python - eta_exp,
+            }
+        )
+        return {
+            "kind": "prototype",
+            "table": table,
+            "result": result,
+            "metrics": {
+                "Eta_exp_media_pct": float(np.mean(eta_exp)),
+                "Eta_TRNSYS_media_pct": float(np.mean(eta_trnsys)),
+                "Eta_Python_media_pct": float(np.nanmean(eta_python)),
+                "Bias_Python_vs_exp_pp": float(np.nanmean(eta_python - eta_exp)),
+            },
+            "note": (
+                "COMPARACIÓN EXPLORATORIA, NO VALIDACIÓN ESTRICTA: Rea Quille no publica Tin/Tout horarios en la Tabela 8. "
+                f"El preset activo usa Tin={cfg['operation']['Tin_K'] - 273.15:.2f} °C como hipótesis editable. "
+                "Los valores Python se muestrean a las horas de la tabla para cuantificar la discrepancia sin ocultar esa limitación."
+            ),
+        }
+
+    if family in {"Rea Quille mensual", "Rea Quille anual"}:
+        fluid = str(cfg["operation"]["fluid"])
+        evaluator = FluidPropertyEvaluator(fluid, fluid_database)
+        tin_ref = float(reference["Tin_C"])
+        tout_ref = float(reference["Tout_C"])
+        mdot_ref = float(reference["mdot_kg_s"])
+        prop_ref = evaluator(0.5 * (tin_ref + tout_ref) + 273.15)
+        q_ref = mdot_ref * prop_ref.Cp * (tout_ref - tin_ref)
+
+        values = [
+            ("T_salida_C", tout_ref, float(result.Tout_C[k])),
+            ("Eta_termica_pct", float(reference["eta_pct"]), float(result.scalar_diag["eta_pct"][k])),
+            ("Q_util_derivado_W", q_ref, float(result.scalar_diag["Quseful_W"][k])),
+        ]
+        table = pd.DataFrame(
+            {
+                "Magnitud": [row[0] for row in values],
+                "Referencia_Rea_Quille": [row[1] for row in values],
+                "Modelo_Python": [row[2] for row in values],
+                "Diferencia": [row[2] - row[1] for row in values],
+                "Error_rel_pct": [_relative_error(row[2], row[1]) for row in values],
+            }
+        )
+        return {
+            "kind": "rea_monthly",
+            "table": table,
+            "result": result,
+            "note": (
+                "La fila de Rea Quille se compara con un estado cuasiestacionario que usa exactamente Tin, Tamb, irradiación y mdot tabulados. "
+                "La comparación no es estrictamente equivalente al TRNSYS anual porque la fuente no publica la serie meteorológica ni todos los parámetros ópticos y de pérdidas del Type1358."
+            ),
+        }
+
+    raise ValueError(f"Tipo de preset no soportado por la validación activa: {family}")

@@ -12,10 +12,17 @@ import pandas as pd
 import streamlit as st
 
 from defaults import default_config, default_fluid_database
+from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_summary_rows
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult
 from technical_report import build_technical_report, result_summary
-from validations import prototype_tcc_table, validate_bhambare, validate_tcc_monthly
+from validations import (
+    prototype_tcc_table,
+    validate_active_preset,
+    validate_bhambare,
+    validate_rea_quille_city_monthly,
+    validate_tcc_monthly,
+)
 from visualizations import (
     axial_profiles,
     comparative_overview,
@@ -39,10 +46,10 @@ st.set_page_config(
 
 
 def initialize_state() -> None:
-    if "config" not in st.session_state:
-        st.session_state.config = default_config()
-    if "fluid_database" not in st.session_state:
-        st.session_state.fluid_database = default_fluid_database()
+    if "config" not in st.session_state or "fluid_database" not in st.session_state:
+        initial_cfg, initial_db = build_preset("base")
+        st.session_state.config = initial_cfg
+        st.session_state.fluid_database = initial_db
     if "results" not in st.session_state:
         st.session_state.results = {}
     if "result_signature" not in st.session_state:
@@ -51,6 +58,14 @@ def initialize_state() -> None:
         st.session_state.validations = {}
     if "loaded_package_name" not in st.session_state:
         st.session_state.loaded_package_name = None
+    if "ui_revision" not in st.session_state:
+        st.session_state.ui_revision = 0
+    if "preset_family_selector" not in st.session_state:
+        st.session_state.preset_family_selector = "base"
+    if "preset_month_selector" not in st.session_state:
+        st.session_state.preset_month_selector = 1
+    if "preset_use_annual" not in st.session_state:
+        st.session_state.preset_use_annual = False
 
 
 def integrate_trapezoid(y: np.ndarray, x: np.ndarray) -> float:
@@ -81,11 +96,29 @@ def project_signature() -> str:
 
 
 def reset_project() -> None:
-    st.session_state.config = default_config()
-    st.session_state.fluid_database = default_fluid_database()
+    base_cfg, base_db = build_preset("base")
+    st.session_state.config = base_cfg
+    st.session_state.fluid_database = base_db
     st.session_state.results = {}
     st.session_state.validations = {}
     st.session_state.result_signature = None
+    st.session_state.loaded_package_name = None
+    st.session_state.ui_revision += 1
+
+
+def apply_reference_preset(family: str, month: int | None = None, annual: bool = False) -> None:
+    new_cfg, new_fluid_db = build_preset(family, month=month, annual=annual)
+    st.session_state.config = new_cfg
+    st.session_state.fluid_database = new_fluid_db
+    st.session_state.results = {}
+    st.session_state.validations = {}
+    st.session_state.result_signature = None
+    st.session_state.loaded_package_name = None
+    st.session_state.ui_revision += 1
+
+
+def widget_key(name: str) -> str:
+    return f"{name}_{int(st.session_state.ui_revision)}"
 
 
 def ensure_constant_properties(fluid_key: str) -> None:
@@ -122,6 +155,7 @@ def load_project_package(uploaded_file: Any) -> None:
     st.session_state.validations = {}
     st.session_state.result_signature = None
     st.session_state.loaded_package_name = uploaded_file.name
+    st.session_state.ui_revision += 1
 
 
 def parse_mass_flows(text: str) -> list[float]:
@@ -249,6 +283,52 @@ st.caption(
 
 with st.sidebar:
     st.header("Configuración")
+
+    st.subheader("Preset documental")
+    preset_family = st.selectbox(
+        "Caso de referencia",
+        list(PRESET_FAMILY_LABELS.keys()),
+        format_func=lambda key: PRESET_FAMILY_LABELS[key],
+        key="preset_family_selector",
+    )
+    preset_month = None
+    preset_annual = False
+    if preset_family in {"rea_foz_monthly", "rea_alvorada_monthly"}:
+        preset_scope = st.radio(
+            "Referencia temporal",
+            ["Mes", "Promedio anual"],
+            horizontal=True,
+            key="preset_scope_selector",
+        )
+        preset_annual = preset_scope == "Promedio anual"
+        if not preset_annual:
+            preset_month = st.selectbox(
+                "Mes de Rea Quille",
+                list(range(1, 13)),
+                index=max(0, int(st.session_state.get("preset_month_selector", 1)) - 1),
+                format_func=lambda value: MONTH_NAMES_ES[value - 1],
+                key="preset_month_selector",
+            )
+    if st.button("Aplicar preset completo", type="primary", use_container_width=True):
+        apply_reference_preset(preset_family, month=preset_month, annual=preset_annual)
+        st.rerun()
+
+    active_meta = cfg.get("preset_meta", {})
+    if active_meta:
+        st.caption(f"Activo: {active_meta.get('family', '—')} · {active_meta.get('date_label', '—')}")
+        with st.expander("Ver parámetros fijados y supuestos", expanded=False):
+            st.dataframe(
+                pd.DataFrame(preset_summary_rows(cfg), columns=["Campo", "Valor"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            assumptions = active_meta.get("assumptions", [])
+            if assumptions:
+                st.warning("La fuente no informa todos los parámetros requeridos por este modelo. Estos valores quedan explícitamente marcados como supuestos:")
+                for item in assumptions:
+                    st.markdown(f"- {item}")
+
+    st.divider()
     uploaded = st.file_uploader("Cargar proyecto JSON", type=["json"])
     if uploaded is not None:
         try:
@@ -461,6 +541,31 @@ with tab_sim:
                 f"La salida está en régimen transicional ({re_lam:.0f} < Re < {re_turb:.0f}). "
                 "El modelo usa una transición continua de Nusselt; no una conmutación abrupta."
             )
+
+        result_meta = result.config.get("preset_meta", {})
+        source_ref = result_meta.get("reference", {})
+        if source_ref:
+            with st.expander("Comparación rápida con la referencia del preset", expanded=True):
+                ref_cols = st.columns(4)
+                ref_cols[0].metric("Fuente", str(result_meta.get("reference_table", "—")))
+                if "eta_pct" in source_ref:
+                    eta_ref = float(source_ref["eta_pct"])
+                    eta_py = float(result.scalar_diag["eta_pct"][k_ref])
+                    ref_cols[1].metric("η referencia", f"{eta_ref:.2f} %")
+                    ref_cols[2].metric("η Python", f"{eta_py:.2f} %", delta=f"{eta_py - eta_ref:+.2f} pp")
+                    if "Tout_C" in source_ref:
+                        ref_cols[3].metric("Tout ref / Python", f"{float(source_ref['Tout_C']):.2f} / {result.Tout_C[k_ref]:.2f} °C")
+                elif "eta_exp_mean_pct" in source_ref:
+                    eta_py = float(result.scalar_diag["eta_pct"][k_ref])
+                    ref_cols[1].metric("η exp. media", f"{float(source_ref['eta_exp_mean_pct']):.2f} %")
+                    ref_cols[2].metric("η TRNSYS media", f"{float(source_ref['eta_trnsys_mean_pct']):.2f} %")
+                    ref_cols[3].metric("η Python", f"{eta_py:.2f} %")
+                    st.warning("Tabela 8 no publica Tin/Tout horarios; la comparación Python depende de la Tin asumida en el preset y no es una validación estricta.")
+                elif "Tout_book_C" in source_ref:
+                    ref_cols[1].metric("Tout Sukhatme", f"{float(source_ref['Tout_book_C']):.2f} °C")
+                    ref_cols[2].metric("Tout Bhambare", f"{float(source_ref['Tout_article_C']):.2f} °C")
+                    ref_cols[3].metric("Tout Python", f"{result.Tout_C[k_ref]:.2f} °C")
+
         if len(st.session_state.results) > 1:
             st.plotly_chart(comparative_overview(st.session_state.results), use_container_width=True)
         else:
@@ -698,49 +803,91 @@ with tab_props:
     st.caption("Este perfil se usa cuando el modo de irradiación es Perfil horario editable.")
 
 with tab_validation:
+    st.subheader("Validación documental")
     st.write(
-        "Las validaciones reproducen los vectores incluidos en los dos documentos fuente y en la versión MATLAB. "
-        "Se ejecutan con la base de propiedades actualmente editada."
+        "Los presets separan los valores publicados de las hipótesis que nuestra formulación necesita y la fuente no informa. "
+        "La comparación del preset activo utiliza exactamente la configuración que está viendo/editando en el sidebar."
     )
-    val_cols = st.columns(3)
-    if val_cols[0].button("Ejecutar Bhambare/Sukhatme", use_container_width=True):
-        try:
-            with st.spinner("Ejecutando validación Bhambare/Sukhatme"):
-                st.session_state.validations["bhambare"] = validate_bhambare(cfg, fluid_db)
-        except Exception as exc:
-            st.exception(exc)
-    if val_cols[1].button("Ejecutar validación mensual TCC", use_container_width=True):
-        try:
-            with st.spinner("Ejecutando 12 casos mensuales"):
-                st.session_state.validations["tcc"] = validate_tcc_monthly(cfg, fluid_db)
-        except Exception as exc:
-            st.exception(exc)
-    if val_cols[2].button("Cargar Tabla 8 del prototipo", use_container_width=True):
-        st.session_state.validations["prototype"] = prototype_tcc_table()
 
-    if "bhambare" in st.session_state.validations:
-        st.subheader("Bhambare / Sukhatme")
-        validation = st.session_state.validations["bhambare"]
+    meta = cfg.get("preset_meta", {})
+    if meta:
+        source_cols = st.columns(4)
+        source_cols[0].metric("Preset activo", str(meta.get("family", "—")))
+        source_cols[1].metric("Ciudad", str(meta.get("city", "—")))
+        source_cols[2].metric("Referencia", str(meta.get("reference_table", "—")))
+        source_cols[3].metric("Caso", str(meta.get("date_label", "—")))
+        if meta.get("assumptions"):
+            with st.expander("Supuestos del preset que afectan la comparación", expanded=False):
+                for item in meta["assumptions"]:
+                    st.markdown(f"- {item}")
+
+    val_cols = st.columns(4)
+    if val_cols[0].button("Validar preset activo", type="primary", use_container_width=True):
+        try:
+            with st.spinner("Ejecutando el preset activo contra su referencia"):
+                st.session_state.validations["active_preset"] = validate_active_preset(cfg, fluid_db)
+        except Exception as exc:
+            st.exception(exc)
+    if val_cols[1].button("12 meses · Foz", use_container_width=True):
+        try:
+            with st.spinner("Ejecutando los 12 presets mensuales de Foz do Iguaçu"):
+                st.session_state.validations["rea_foz"] = validate_rea_quille_city_monthly("Foz do Iguaçu", fluid_db)
+        except Exception as exc:
+            st.exception(exc)
+    if val_cols[2].button("12 meses · Alvorada", use_container_width=True):
+        try:
+            with st.spinner("Ejecutando los 12 presets mensuales de Alvorada do Norte"):
+                st.session_state.validations["rea_alvorada"] = validate_rea_quille_city_monthly("Alvorada do Norte", fluid_db)
+        except Exception as exc:
+            st.exception(exc)
+    if val_cols[3].button("Tabla 8 · Experimental/TRNSYS", use_container_width=True):
+        st.session_state.validations["prototype_table"] = prototype_tcc_table()
+
+    if "active_preset" in st.session_state.validations:
+        validation = st.session_state.validations["active_preset"]
+        st.divider()
+        st.subheader("Preset activo vs documento")
         st.caption(validation["note"])
-        st.dataframe(validation["table"], use_container_width=True, hide_index=True)
-        st.plotly_chart(validation_bhambare_figure(validation["table"]), use_container_width=True)
-    if "tcc" in st.session_state.validations:
-        st.subheader("TCC / TRNSYS mensual")
-        validation = st.session_state.validations["tcc"]
-        metrics = validation["metrics"]
-        metric_cols = st.columns(3)
-        metric_cols[0].metric("MAPE Tout", f"{metrics['MAPE_Tout_pct']:.3f} %")
-        metric_cols[1].metric("MAPE Q útil", f"{metrics['MAPE_Qutil_pct']:.3f} %")
-        metric_cols[2].metric("MAPE eta", f"{metrics['MAPE_eta_pct']:.3f} %")
-        st.caption(validation["note"])
-        st.dataframe(validation["table"], use_container_width=True, hide_index=True)
-        st.plotly_chart(validation_tcc_figure(validation["table"]), use_container_width=True)
-    if "prototype" in st.session_state.validations:
-        st.subheader("Tabla 8 del prototipo")
-        validation = st.session_state.validations["prototype"]
-        prototype_cols = st.columns(2)
-        prototype_cols[0].metric("RMSE", f"{validation['RMSE_pp']:.3f} puntos porcentuales")
-        prototype_cols[1].metric("MAPE", f"{validation['MAPE_pct']:.3f} %")
+        kind = validation.get("kind")
+        if kind == "prototype":
+            metrics = validation["metrics"]
+            mcols = st.columns(4)
+            mcols[0].metric("η exp. media", f"{metrics['Eta_exp_media_pct']:.2f} %")
+            mcols[1].metric("η TRNSYS media", f"{metrics['Eta_TRNSYS_media_pct']:.2f} %")
+            mcols[2].metric("η Python media", f"{metrics['Eta_Python_media_pct']:.2f} %")
+            mcols[3].metric("Bias Python-exp", f"{metrics['Bias_Python_vs_exp_pp']:+.2f} pp")
+            st.warning("La comparación Python del prototipo es exploratoria porque la Tabela 8 no publica Tin/Tout horarios. El valor de Tin mostrado en el preset es una hipótesis explícita y editable.")
+            st.dataframe(validation["table"], use_container_width=True, hide_index=True)
+        elif kind == "bhambare":
+            st.dataframe(validation["table"], use_container_width=True, hide_index=True)
+            st.plotly_chart(validation_bhambare_figure(validation["table"]), use_container_width=True)
+        else:
+            st.dataframe(validation["table"], use_container_width=True, hide_index=True)
+
+    for key, title in (("rea_foz", "Rea Quille — Foz do Iguaçu — Tabela 10"), ("rea_alvorada", "Rea Quille — Alvorada do Norte — Tabela 11")):
+        if key in st.session_state.validations:
+            validation = st.session_state.validations[key]
+            st.divider()
+            st.subheader(title)
+            metrics = validation["metrics"]
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("MAPE Tout", f"{metrics['MAPE_Tout_pct']:.2f} %")
+            metric_cols[1].metric("MAPE Q útil", f"{metrics['MAPE_Qutil_pct']:.2f} %")
+            metric_cols[2].metric("MAPE η", f"{metrics['MAPE_eta_pct']:.2f} %")
+            metric_cols[3].metric("Bias η", f"{metrics['Bias_eta_pp']:+.2f} pp")
+            st.caption(validation["note"])
+            st.dataframe(validation["table"], use_container_width=True, hide_index=True)
+            st.plotly_chart(validation_tcc_figure(validation["table"]), use_container_width=True)
+
+    if "prototype_table" in st.session_state.validations:
+        validation = st.session_state.validations["prototype_table"]
+        st.divider()
+        st.subheader("Rea Quille / Fiamonzini — Tabela 8")
+        prototype_cols = st.columns(4)
+        prototype_cols[0].metric("η experimental media", f"{validation['eta_exp_mean_pct']:.2f} %")
+        prototype_cols[1].metric("η TRNSYS media", f"{validation['eta_trnsys_mean_pct']:.2f} %")
+        prototype_cols[2].metric("RMSE TRNSYS-exp", f"{validation['RMSE_pp']:.2f} pp")
+        prototype_cols[3].metric("MAPE TRNSYS-exp", f"{validation['MAPE_pct']:.2f} %")
         st.caption(validation["note"])
         st.dataframe(validation["table"], use_container_width=True, hide_index=True)
 
