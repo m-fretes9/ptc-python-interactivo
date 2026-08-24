@@ -409,19 +409,25 @@ def thermal_resistance_network(
     _add_network_label(fig, 0.5 * (x5 + x_end), 0.86, "radiación", r57, q57)
     _add_network_label(fig, 0.5 * (x5 + x_end), 0.10, "convección", r56, q56)
 
+    q_htf_rise = -float(snapshot["Qadvection_W"])
+    q_htf_storage = q12 - q_htf_rise
     fig.add_annotation(
         x=0.50,
-        y=-0.055,
+        y=-0.070,
         xref="paper",
         yref="paper",
         text=(
             "Nodos: 1 HTF; 2 pared interna del absorbedor; 3 pared externa del absorbedor; "
-            "4 pared interna del vidrio; 5 pared externa del vidrio; 6 ambiente; 7 cielo. "
-            "Modelo lumped: T2 = T3 y T4 = T5."
+            "4 pared interna del vidrio; 5 pared externa del vidrio; 6 ambiente; 7 cielo.<br>"
+            f"<b>Transporte axial HTF del volumen:</b> ΔH = {q_htf_rise:.2f} W &nbsp; | &nbsp; "
+            f"Q absorbedor→HTF = {q12:.2f} W &nbsp; | &nbsp; "
+            f"acumulación = {q_htf_storage:.3e} W. "
+            "En régimen estacionario la acumulación tiende a cero, no los flujos."
         ),
         showarrow=False,
         font={"color": "black", "size": 11},
         align="center",
+        bgcolor="white",
     )
 
     fig.update_xaxes(range=[0.0, 0.98], visible=False, fixedrange=True)
@@ -443,7 +449,7 @@ def thermal_resistance_network(
         plot_bgcolor="white",
         font={"color": "black"},
         hoverlabel={"bgcolor": "white", "font_color": "black", "bordercolor": "black"},
-        margin={"l": 12, "r": 12, "t": 70, "b": 78},
+        margin={"l": 12, "r": 12, "t": 70, "b": 105},
     )
     return fig
 

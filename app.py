@@ -142,6 +142,35 @@ def active_result_selector(location: str) -> tuple[str | None, SimulationResult 
     return label, results[label]
 
 
+def representative_time_index(result: SimulationResult) -> tuple[int, str]:
+    """Selecciona un instante útil para KPIs y análisis nodal.
+
+    Con DNI constante no se debe usar argmax(DNI), porque todos los puntos son
+    iguales y NumPy devuelve t0. En t0 el modelo todavía está en su condición
+    inicial, por lo que Q hacia el HTF es cero aunque después exista transporte
+    continuo de energía. Para irradiación constante se usa el estado final;
+    para irradiación variable se usa el último punto del máximo de DNI.
+    """
+    dni_series = np.asarray(result.scalar_diag["DNI_W_m2"], dtype=float)
+    finite_idx = np.flatnonzero(np.isfinite(dni_series))
+    if finite_idx.size == 0:
+        return len(result.t_s) - 1, "Estado final (DNI no disponible)."
+
+    dni_valid = dni_series[finite_idx]
+    dni_scale = max(float(np.nanmax(np.abs(dni_valid))), 1.0)
+    dni_is_constant = float(np.nanmax(dni_valid) - np.nanmin(dni_valid)) <= 1e-8 * dni_scale
+    if dni_is_constant:
+        return int(finite_idx[-1]), "Estado final: DNI constante; se evita el punto inicial transitorio."
+
+    max_dni = float(np.nanmax(dni_valid))
+    peak_candidates = finite_idx[
+        np.isclose(dni_series[finite_idx], max_dni, rtol=1e-10, atol=1e-9)
+    ]
+    if peak_candidates.size:
+        return int(peak_candidates[-1]), "Último instante correspondiente al DNI máximo."
+    return int(finite_idx[np.nanargmax(dni_valid)]), "Instante de DNI máximo."
+
+
 initialize_state()
 cfg = st.session_state.config
 fluid_db = st.session_state.fluid_database
@@ -318,27 +347,8 @@ with tab_sim:
     if result is None:
         st.info("Configure el caso y pulse Ejecutar simulación.")
     else:
-        # Instante representativo de los KPIs:
-        # - con DNI constante, np.nanargmax devuelve siempre el primer punto (t0),
-        #   donde por la condición inicial Tout = Tin y la eficiencia transitoria es 0 %.
-        # - con irradiación variable, mantenemos el instante de DNI máximo.
-        dni_series = np.asarray(result.scalar_diag["DNI_W_m2"], dtype=float)
-        finite_idx = np.flatnonzero(np.isfinite(dni_series))
-        if finite_idx.size == 0:
-            k_ref = len(result.t_s) - 1
-            kpi_caption = "KPIs en el estado final (DNI no disponible)."
-        else:
-            dni_valid = dni_series[finite_idx]
-            dni_scale = max(float(np.nanmax(np.abs(dni_valid))), 1.0)
-            dni_is_constant = float(np.nanmax(dni_valid) - np.nanmin(dni_valid)) <= 1e-8 * dni_scale
-            if dni_is_constant:
-                k_ref = int(finite_idx[-1])
-                kpi_caption = "KPIs en el estado final: el DNI es constante, por lo que se evita usar el punto inicial transitorio."
-            else:
-                max_dni = float(np.nanmax(dni_valid))
-                peak_candidates = finite_idx[np.isclose(dni_series[finite_idx], max_dni, rtol=1e-10, atol=1e-9)]
-                k_ref = int(peak_candidates[-1]) if peak_candidates.size else int(finite_idx[np.nanargmax(dni_valid)])
-                kpi_caption = "KPIs en el instante de DNI máximo."
+        k_ref, ref_caption = representative_time_index(result)
+        kpi_caption = f"KPIs: {ref_caption}"
 
         cols = st.columns(6)
         cols[0].metric("DNI", f"{result.scalar_diag['DNI_W_m2'][k_ref]:.1f} W/m²")
@@ -367,17 +377,41 @@ with tab_nodes:
     if result is None:
         st.info("Primero ejecute una simulación.")
     else:
+        node_default_index, node_default_caption = representative_time_index(result)
         time_index = st.slider(
             "Instante de análisis",
             min_value=0,
             max_value=len(result.t_s) - 1,
-            value=int(np.nanargmax(result.scalar_diag["DNI_W_m2"])),
+            value=node_default_index,
             format="índice %d",
+            key=f"node_time_index_{label}",
         )
+        st.caption(f"Selección inicial del análisis nodal: {node_default_caption}")
         node_number = st.slider("Nodo axial", min_value=1, max_value=result.n_segments, value=min(1, result.n_segments))
         node_index = node_number - 1
         snapshot = result.node_snapshot(time_index, node_index)
         st.caption(f"LAT = {snapshot['LAT_h']:.3f} h; nodo {node_number}; x = {(node_index + 0.5) * result.config['geometry']['L'] / result.n_segments:.3f} m")
+
+        # En régimen estacionario las derivadas pueden ser ~0 sin que los flujos sean 0.
+        # El calor radial absorbido por el HTF debe compensar el incremento de entalpía
+        # axial del fluido dentro del volumen de control.
+        q_to_htf = float(snapshot["Qfluid_W"])
+        q_htf_rise = -float(snapshot["Qadvection_W"])
+        q_fluid_storage = q_to_htf - q_htf_rise
+        q_abs_to_glass = float(snapshot["Qrad_abs_glass_W"] + snapshot["Qconv_annulus_W"])
+        q_external_loss = float(snapshot["Qconv_external_W"] + snapshot["Qrad_sky_W"] + snapshot["Qsupports_W"])
+        flow_cols = st.columns(6)
+        flow_cols[0].metric("Q solar / nodo", f"{snapshot['Qsolar_abs_node_W']:.2f} W")
+        flow_cols[1].metric("Absorbedor → HTF", f"{q_to_htf:.2f} W")
+        flow_cols[2].metric("ΔH axial del HTF", f"{q_htf_rise:.2f} W")
+        flow_cols[3].metric("Absorbedor → vidrio", f"{q_abs_to_glass:.2f} W")
+        flow_cols[4].metric("Pérdida exterior", f"{q_external_loss:.2f} W")
+        flow_cols[5].metric("Acumulación HTF", f"{q_fluid_storage:.3e} W")
+        st.caption(
+            "Balance del HTF por nodo: C_f·dTf/dt = Q_absorbedor→HTF - ΔH_axial. "
+            "En equilibrio térmico dTf/dt ≈ 0, pero ambos términos permanecen finitos y casi iguales."
+        )
+
         top_left, top_right = st.columns(2)
         with top_left:
             st.plotly_chart(ptc_schematic(result.config, node_index), use_container_width=True)
