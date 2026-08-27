@@ -202,7 +202,7 @@ function renderHeat(){{
     if(t.hit){{hits++;let a=Math.atan2(t.hit[1]-G.f,t.hit[0]);if(a<0)a+=Math.PI*2;const b=Math.floor(a/(Math.PI*2)*bins)%bins;counts[b]++;}}
   }}
   const mx=Math.max(1,...counts), c=P(0,G.f), r=(G.D3/2)*860/(xMax-xMin), arcs=document.getElementById('heatArcs');
-  for(let b=0;b<bins;b++){{const a0=b/bins*Math.PI*2,a1=(b+1)/bins*Math.PI*2,t=counts[b]/mx,p=el('path',{{d:arcPath(c[0],c[1],r,a0,a1),fill:'none',stroke:colorScale(t),'stroke-width':22,'stroke-linecap':'round',filter:'drop-shadow(0 0 3px rgba(249,115,22,.28))'}});p.appendChild(el('title'));p.firstChild.textContent=`Sector ${{b+1}} · intensidad relativa ${{(100*t).toFixed(1)}}%`;arcs.appendChild(p);}}
+  for(let b=0;b<bins;b++){{const a0=b/bins*Math.PI*2,a1=(b+1)/bins*Math.PI*2,t=counts[b]/mx,p=el('path',{{d:arcPath(c[0],c[1],r,a0,a1),fill:'none',stroke:colorScale(t),'stroke-width':34,'stroke-linecap':'round',filter:'drop-shadow(0 0 3px rgba(249,115,22,.28))'}});p.appendChild(el('title'));p.firstChild.textContent=`Sector ${{b+1}} · intensidad relativa ${{(100*t).toFixed(1)}}%`;arcs.appendChild(p);}}
   document.getElementById('hits').textContent=`${{hits}} / 180`;
   const dx=G.L/G.Nseg, areaSector=(Math.PI*G.D3*dx)/bins, peakW=D.Qsolar*(mx/Math.max(1,hits))/areaSector;
   document.getElementById('peak').textContent=Number.isFinite(peakW)?`${{peakW.toFixed(0)}} W/m²`:'—';
@@ -229,7 +229,7 @@ def thermal_circuit_component_html(
     config: Mapping[str, Any],
     snapshot: Mapping[str, float],
 ) -> str:
-    """Circuito térmico interactivo en SVG/CSS/JS."""
+    """Circuito térmico SVG/JS con estética de esquema eléctrico."""
     import math
 
     g = config["geometry"]
@@ -248,6 +248,9 @@ def thermal_circuit_component_html(
     tamb_c = float(env["Tamb_K"]) - 273.15
     tsky_c = float(snapshot.get("Tsky_C", tamb_c - float(env.get("sky_delta_K", 6.0))))
 
+    # Sign convention from the solver:
+    # Qfluid > 0 means absorber -> HTF. The circuit is drawn left-to-right as
+    # HTF -> absorber, so the signed direction for branches 1-2 and 2-3 is -Qfluid.
     qfluid = float(snapshot.get("Qfluid_W", 0.0))
     qsolar = float(snapshot.get("Qsolar_abs_node_W", 0.0))
     qradag = float(snapshot.get("Qrad_abs_glass_W", 0.0))
@@ -288,13 +291,20 @@ def thermal_circuit_component_html(
             "r57": finite_or_none("R_rad_sky_K_W"),
         },
         "Q": {
-            "q12": qfluid,
-            "q23": qfluid,
-            "q34rad": qradag,
-            "q34conv": qconvag,
-            "q45": qconvext + qradsky,
-            "q56": qconvext,
-            "q57": qradsky,
+            "q12dir": -qfluid,
+            "q23dir": -qfluid,
+            "q12": abs(qfluid),
+            "q23": abs(qfluid),
+            "q34radDir": qradag,
+            "q34convDir": qconvag,
+            "q45Dir": qconvext + qradsky,
+            "q56Dir": qconvext,
+            "q57Dir": qradsky,
+            "q34rad": abs(qradag),
+            "q34conv": abs(qconvag),
+            "q45": abs(qconvext + qradsky),
+            "q56": abs(qconvext),
+            "q57": abs(qradsky),
             "qsolar": qsolar,
             "qsupports": qsupports,
             "qdh": qdh,
@@ -306,42 +316,35 @@ def thermal_circuit_component_html(
 <head>
 <meta charset="utf-8" />
 <style>
-:root{{--ink:#111827;--muted:#64748b;--wire:#111827;--flow:#ef4444;--solar:#f59e0b;--border:#e2e8f0}}
+:root{{--ink:#151b26;--muted:#64748b;--wire:#1d2430;--flow:#ff5a4f;--solar:#f59e0b;--border:#e4e8ee}}
 *{{box-sizing:border-box}}
 html,body{{margin:0;padding:0;background:transparent;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--ink)}}
-.card{{background:#fff;border:1px solid var(--border);border-radius:18px;overflow:hidden;box-shadow:0 8px 24px rgba(15,23,42,.05)}}
-.head{{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px 12px;border-bottom:1px solid #eef2f7;background:linear-gradient(180deg,#fff,#fbfdff)}}
-.title{{font-size:16px;font-weight:730;letter-spacing:-.01em}}
-.meta{{font-size:11px;color:var(--muted)}}
-.scene{{padding:8px 10px 4px;background:#fff}}
-svg{{width:100%;height:530px;display:block}}
-.wire{{fill:none;stroke:var(--wire);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}}
-.resistor{{fill:none;stroke:var(--wire);stroke-width:3.1;stroke-linecap:round;stroke-linejoin:round}}
-.node{{fill:#111827;stroke:#fff;stroke-width:2}}
-.node-halo{{fill:#fff;stroke:#dbe4ee;stroke-width:1.2}}
-.node-name{{font-size:12px;font-weight:750;fill:#111827}}
-.node-temp{{font-size:11px;fill:#64748b}}
-.branch-label{{font-size:11px;font-weight:700;fill:#334155}}
-.branch-value{{font-size:10px;fill:#64748b}}
-.flow-line{{fill:none;stroke:var(--flow);stroke-width:2;stroke-linecap:round;opacity:.78}}
-.flow-dot{{fill:var(--flow);filter:drop-shadow(0 0 2px rgba(239,68,68,.35))}}
-.solar-line{{stroke:var(--solar);stroke-width:3;stroke-linecap:round}}
-.solar-dot{{fill:var(--solar);filter:drop-shadow(0 0 3px rgba(245,158,11,.4))}}
-.solar-label{{font-size:11px;font-weight:750;fill:#92400e}}
-.legend{{display:flex;gap:18px;align-items:center;padding:0 16px 12px;font-size:11px;color:#64748b}}
-.legend i{{display:inline-block;width:20px;height:3px;border-radius:999px;vertical-align:middle;margin-right:6px}}
-.summary{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 16px 14px}}
-.metric{{border:1px solid #e8edf3;border-radius:12px;padding:8px 10px;background:#fff}}
-.k{{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.035em}}
-.v{{font-size:14px;font-weight:740;margin-top:2px}}
-@media(max-width:900px){{svg{{height:480px}}.summary{{grid-template-columns:repeat(2,1fr)}}}}
+.card{{background:#fff;border:1px solid var(--border);border-radius:16px;overflow:hidden}}
+.head{{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #eef1f5}}
+.title{{font-size:15px;font-weight:720}} .meta{{font-size:11px;color:var(--muted)}}
+.scene{{padding:2px 8px 0;background:#fff}}
+svg{{width:100%;height:480px;display:block}}
+.wire{{fill:none;stroke:var(--wire);stroke-width:2.15;stroke-linecap:round;stroke-linejoin:round}}
+.resistor{{fill:none;stroke:var(--wire);stroke-width:2.35;stroke-linecap:round;stroke-linejoin:round}}
+.node{{fill:var(--wire)}}
+.node-name{{font-size:11px;font-weight:730;fill:#111827}}
+.node-temp{{font-size:10px;fill:#64748b}}
+.branch-name{{font-size:10.5px;font-weight:700;fill:#334155}}
+.branch-value{{font-size:9.5px;fill:#64748b}}
+.flow{{fill:none;stroke:var(--flow);stroke-width:1.55;stroke-linecap:round}}
+.flow-dot{{fill:var(--flow)}}
+.solar{{fill:none;stroke:var(--solar);stroke-width:2}}
+.solar-label{{font-size:10.5px;font-weight:720;fill:#9a5b00}}
+.summary{{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;padding:0 14px 13px}}
+.metric{{border:1px solid #e8edf3;border-radius:10px;padding:7px 9px;background:#fff}}
+.k{{font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.035em}} .v{{font-size:13px;font-weight:720;margin-top:2px}}
+@media(max-width:900px){{svg{{height:440px}}.summary{{grid-template-columns:repeat(2,1fr)}}}}
 </style>
 </head>
 <body>
 <div class="card">
   <div class="head"><div class="title">Circuito térmico · nodo axial {data['node']}</div><div class="meta">LAT {data['LAT']:.3f} h</div></div>
-  <div class="scene"><svg id="circuit" viewBox="0 0 1120 560" preserveAspectRatio="xMidYMid meet"></svg></div>
-  <div class="legend"><span><i style="background:#111827"></i>resistencia térmica</span><span><i style="background:#ef4444"></i>sentido del flujo</span><span><i style="background:#f59e0b"></i>aporte solar</span></div>
+  <div class="scene"><svg id="circuit" viewBox="0 0 1180 500" preserveAspectRatio="xMidYMid meet"></svg></div>
   <div class="summary">
     <div class="metric"><div class="k">Q solar / nodo</div><div class="v">{qsolar:.2f} W</div></div>
     <div class="metric"><div class="k">Absorbedor → HTF</div><div class="v">{qfluid:.2f} W</div></div>
@@ -355,65 +358,76 @@ function E(tag,a={{}}){{const e=document.createElementNS(NS,tag);for(const [k,v]
 function add(tag,a={{}},parent=svg){{const e=E(tag,a);parent.appendChild(e);return e;}}
 function txt(x,y,text,cls,anchor='middle'){{const e=add('text',{{x,y,class:cls,'text-anchor':anchor}});e.textContent=text;return e;}}
 function fmtR(v){{return (v===null||!Number.isFinite(v))?'∞':(Math.abs(v)>=1000?v.toExponential(2):v.toPrecision(4))+' K/W';}}
-function fmtQ(v){{return `${{v.toFixed(2)}} W`;}}
+function fmtQ(v){{return `${{Math.abs(v).toFixed(2)}} W`;}}
+function mix(a,b,t){{return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];}}
 
 const defs=add('defs');
-const marker=add('marker',{{id:'arrowFlow',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto-start-reverse'}},defs);
-add('path',{{d:'M 0 0 L 10 5 L 0 10 z',fill:'#ef4444'}},marker);
-const markerSolar=add('marker',{{id:'arrowSolar',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto'}},defs);
+const marker=add('marker',{{id:'arrowFlow',viewBox:'0 0 10 10',refX:8.5,refY:5,markerWidth:4.4,markerHeight:4.4,orient:'auto'}},defs);
+add('path',{{d:'M 0 0 L 10 5 L 0 10 z',fill:'#ff5a4f'}},marker);
+const markerSolar=add('marker',{{id:'arrowSolar',viewBox:'0 0 10 10',refX:8.5,refY:5,markerWidth:4.4,markerHeight:4.4,orient:'auto'}},defs);
 add('path',{{d:'M 0 0 L 10 5 L 0 10 z',fill:'#f59e0b'}},markerSolar);
 
-function wire(x1,y1,x2,y2){{add('path',{{d:`M${{x1}},${{y1}} L${{x2}},${{y2}}`,class:'wire'}});}}
-function resistorPath(x1,y1,x2,y2,teeth=7){{
-  const dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L,nx=-uy,ny=ux;
-  const lead=Math.min(20,L*.14), amp=Math.min(13,L*.11), usable=L-2*lead;
-  let d=`M ${{x1}} ${{y1}} L ${{x1+lead*ux}} ${{y1+lead*uy}}`;
-  const pts=teeth*2;
-  for(let i=1;i<=pts;i++){{const s=lead+usable*i/(pts+1),off=(i%2?amp:-amp);d+=` L ${{x1+s*ux+off*nx}} ${{y1+s*uy+off*ny}}`;}}
-  d+=` L ${{x2-lead*ux}} ${{y2-lead*uy}} L ${{x2}} ${{y2}}`;return d;
+function wire(a,b){{add('path',{{d:`M ${{a[0]}} ${{a[1]}} L ${{b[0]}} ${{b[1]}}`,class:'wire'}});}}
+function resistorPath(a,b,teeth=5){{
+  const dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L,nx=-uy,ny=ux;
+  const amp=Math.min(7,L*.12), steps=teeth*2;
+  let d=`M ${{a[0]}} ${{a[1]}}`;
+  for(let i=1;i<=steps;i++){{const s=L*i/(steps+1),off=(i%2?amp:-amp);d+=` L ${{a[0]+s*ux+off*nx}} ${{a[1]+s*uy+off*ny}}`;}}
+  d+=` L ${{b[0]}} ${{b[1]}}`;return d;
 }}
-function resistor(x1,y1,x2,y2){{add('path',{{d:resistorPath(x1,y1,x2,y2),class:'resistor'}});}}
-function node(x,y,name,temp,num){{
-  add('circle',{{cx:x,cy:y,r:17,class:'node-halo'}});add('circle',{{cx:x,cy:y,r:6,class:'node'}});
-  txt(x,y-29,name,'node-name');txt(x,y-15,`${{temp.toFixed(2)}} °C`,'node-temp');txt(x,y+34,`(${{num}})`,'node-temp');
+function resistor(a,b){{add('path',{{d:resistorPath(a,b),class:'resistor'}});}}
+function node(p,name,temp,num,anchor='middle'){{
+  add('circle',{{cx:p[0],cy:p[1],r:4.5,class:'node'}});
+  const dx=anchor==='start'?10:anchor==='end'?-10:0;
+  txt(p[0]+dx,p[1]-19,name,'node-name',anchor);txt(p[0]+dx,p[1]-7,`${{temp.toFixed(2)}} °C`,'node-temp',anchor);txt(p[0],p[1]+22,`(${{num}})`,'node-temp');
 }}
-function flowArrow(x1,y1,x2,y2,q,offset=24){{
-  const dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy)||1,nx=-dy/L,ny=dx/L;
-  let a=[x1+nx*offset,y1+ny*offset],b=[x2+nx*offset,y2+ny*offset];
-  if(q<0){{const t=a;a=b;b=t;}}
-  const p=add('path',{{d:`M ${{a[0]}} ${{a[1]}} L ${{b[0]}} ${{b[1]}}`,class:'flow-line','marker-end':'url(#arrowFlow)'}});
-  const dot=add('circle',{{r:4,class:'flow-dot'}});
-  add('animateMotion',{{dur:`${{Math.max(1.2,2.8-Math.min(Math.abs(q)/120,1.3))}}s`,repeatCount:'indefinite',path:p.getAttribute('d')}},dot);
+function shortFlow(a,b,qDir,side=1){{
+  const dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L,nx=-uy/L*L,ny=ux/L*L;
+  const mid=mix(a,b,.5), half=Math.min(24,L*.16), off=16*side;
+  let s=[mid[0]-ux*half+(-uy)*off,mid[1]-uy*half+(ux)*off];
+  let e=[mid[0]+ux*half+(-uy)*off,mid[1]+uy*half+(ux)*off];
+  if(qDir<0){{const t=s;s=e;e=t;}}
+  const path=`M ${{s[0]}} ${{s[1]}} L ${{e[0]}} ${{e[1]}}`;
+  add('path',{{d:path,class:'flow','marker-end':'url(#arrowFlow)'}});
+  if(Math.abs(qDir)>1e-9){{const dot=add('circle',{{r:2.4,class:'flow-dot'}});add('animateMotion',{{dur:'1.9s',repeatCount:'indefinite',path}},dot);}}
 }}
-function labelBranch(x,y,name,r,q){{txt(x,y,name,'branch-label');txt(x,y+15,`R = ${{fmtR(r)}} · Q = ${{fmtQ(q)}}`,'branch-value');}}
-function branch(a,b,name,r,q,offset=25,labelDy=-33){{resistor(...a,...b);flowArrow(...a,...b,q,offset);labelBranch((a[0]+b[0])/2,(a[1]+b[1])/2+labelDy,name,r,q);}}
+function branch(a,b,name,r,qDir,qDisplay,side=1){{
+  const rs=mix(a,b,.38), re=mix(a,b,.62);
+  wire(a,rs);resistor(rs,re);wire(re,b);shortFlow(rs,re,qDir,side);
+  const mid=mix(rs,re,.5), dx=re[0]-rs[0],dy=re[1]-rs[1],L=Math.hypot(dx,dy)||1,nx=-dy/L,ny=dx/L;
+  const labelOff=-25*side;
+  txt(mid[0]+nx*labelOff,mid[1]+ny*labelOff,name,'branch-name');
+  txt(mid[0]+nx*labelOff,mid[1]+ny*labelOff+13,`R = ${{fmtR(r)}} · Q = ${{fmtQ(qDisplay)}}`,'branch-value');
+}}
 
-const N={{n1:[80,300],n2:[220,300],n3:[380,300],n4:[610,300],n5:[760,300],n6:[1030,420],n7:[1030,180]}};
+const N={{n1:[78,250],n2:[245,250],n3:[412,250],n4:[610,250],n5:[765,250],n6:[1080,355],n7:[1080,145]}};
 
-add('path',{{d:`M ${{N.n3[0]}} 65 L ${{N.n3[0]}} 255`,class:'solar-line','marker-end':'url(#arrowSolar)'}});
-const sdot=add('circle',{{r:5,class:'solar-dot'}});
-add('animateMotion',{{dur:'1.8s',repeatCount:'indefinite',path:`M ${{N.n3[0]}} 65 L ${{N.n3[0]}} 248`}},sdot);
-txt(N.n3[0],45,'Radiación solar','solar-label');txt(N.n3[0],61,`Q = ${{fmtQ(D.Q.qsolar)}}`,'branch-value');
+// Solar input at absorber outer surface.
+add('path',{{d:`M ${{N.n3[0]}} 45 L ${{N.n3[0]}} 224`,class:'solar','marker-end':'url(#arrowSolar)'}});
+const sdot=add('circle',{{r:2.8,fill:'#f59e0b'}});add('animateMotion',{{dur:'1.8s',repeatCount:'indefinite',path:`M ${{N.n3[0]}} 45 L ${{N.n3[0]}} 216`}},sdot);
+txt(N.n3[0],28,'Radiación solar','solar-label');txt(N.n3[0],40,`Q = ${{fmtQ(D.Q.qsolar)}}`,'branch-value');
 
-branch(N.n1,N.n2,'Convección interna',D.R.r12,D.Q.q12,27,-42);
-branch(N.n2,N.n3,'Conducción absorbedor',D.R.r23,D.Q.q23,-28,47);
+// Positive Qfluid from the solver is absorber -> HTF, hence negative direction
+// on branches drawn geometrically from HTF (left) to absorber (right).
+branch(N.n1,N.n2,'Convección interna',D.R.r12,D.Q.q12dir,D.Q.q12,1);
+branch(N.n2,N.n3,'Conducción absorbedor',D.R.r23,D.Q.q23dir,D.Q.q23,-1);
 
 if(D.hasGlass){{
-  wire(N.n3[0],N.n3[1],N.n3[0],180);wire(N.n4[0],N.n4[1],N.n4[0],180);
-  wire(N.n3[0],N.n3[1],N.n3[0],420);wire(N.n4[0],N.n4[1],N.n4[0],420);
-  branch([N.n3[0],180],[N.n4[0],180],'Radiación abs. → vidrio',D.R.r34rad,D.Q.q34rad,-24,-39);
-  branch([N.n3[0],420],[N.n4[0],420],'Convección anular',D.R.r34conv,D.Q.q34conv,24,47);
-  branch(N.n4,N.n5,'Conducción vidrio',D.R.r45,D.Q.q45,27,-42);
-  wire(N.n5[0],N.n5[1],N.n5[0],180);wire(N.n5[0],N.n5[1],N.n5[0],420);
-  branch([N.n5[0],180],N.n7,'Radiación → cielo',D.R.r57,D.Q.q57,-25,-39);
-  branch([N.n5[0],420],N.n6,'Convección → ambiente',D.R.r56,D.Q.q56,25,47);
-  node(...N.n1,'Tagua',D.T.Tagua,1);node(...N.n2,'Tabs,int',D.T.TabsI,2);node(...N.n3,'Tabs,ext',D.T.TabsE,3);
-  node(...N.n4,'Tvid,int',D.T.TvidI,4);node(...N.n5,'Tvid,ext',D.T.TvidE,5);node(...N.n6,'Tamb',D.T.Tamb,6);node(...N.n7,'Tsky',D.T.Tsky,7);
+  const A=[N.n3[0],145], B=[N.n4[0],145], C=[N.n3[0],355], Dn=[N.n4[0],355];
+  wire(N.n3,A);wire(N.n4,B);wire(N.n3,C);wire(N.n4,Dn);
+  branch(A,B,'Radiación abs. → vidrio',D.R.r34rad,D.Q.q34radDir,D.Q.q34rad,1);
+  branch(C,Dn,'Convección anular',D.R.r34conv,D.Q.q34convDir,D.Q.q34conv,-1);
+  branch(N.n4,N.n5,'Conducción vidrio',D.R.r45,D.Q.q45Dir,D.Q.q45,1);
+  const E7=[N.n5[0],145], E6=[N.n5[0],355];wire(N.n5,E7);wire(N.n5,E6);
+  branch(E7,N.n7,'Radiación → cielo',D.R.r57,D.Q.q57Dir,D.Q.q57,1);
+  branch(E6,N.n6,'Convección → ambiente',D.R.r56,D.Q.q56Dir,D.Q.q56,-1);
+  node(N.n1,'Tagua',D.T.Tagua,1,'start');node(N.n2,'Tabs,int',D.T.TabsI,2);node(N.n3,'Tabs,ext',D.T.TabsE,3);
+  node(N.n4,'Tvid,int',D.T.TvidI,4);node(N.n5,'Tvid,ext',D.T.TvidE,5);node(N.n6,'Tamb',D.T.Tamb,6,'end');node(N.n7,'Tsky',D.T.Tsky,7,'end');
 }} else {{
-  wire(N.n3[0],N.n3[1],N.n3[0],180);wire(N.n3[0],N.n3[1],N.n3[0],420);
-  branch([N.n3[0],180],N.n7,'Radiación → cielo',D.R.r57,D.Q.q57,-25,-39);
-  branch([N.n3[0],420],N.n6,'Convección → ambiente',D.R.r56,D.Q.q56,25,47);
-  node(...N.n1,'Tagua',D.T.Tagua,1);node(...N.n2,'Tabs,int',D.T.TabsI,2);node(...N.n3,'Tabs,ext',D.T.TabsE,3);node(...N.n6,'Tamb',D.T.Tamb,6);node(...N.n7,'Tsky',D.T.Tsky,7);
+  const A=[N.n3[0],145], C=[N.n3[0],355];wire(N.n3,A);wire(N.n3,C);
+  branch(A,N.n7,'Radiación → cielo',D.R.r57,D.Q.q57Dir,D.Q.q57,1);
+  branch(C,N.n6,'Convección → ambiente',D.R.r56,D.Q.q56Dir,D.Q.q56,-1);
+  node(N.n1,'Tagua',D.T.Tagua,1,'start');node(N.n2,'Tabs,int',D.T.TabsI,2);node(N.n3,'Tabs,ext',D.T.TabsE,3);node(N.n6,'Tamb',D.T.Tamb,6,'end');node(N.n7,'Tsky',D.T.Tsky,7,'end');
 }}
 </script>
 </body></html>"""

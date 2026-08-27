@@ -652,14 +652,6 @@ with tab_nodes:
             st.session_state[state_key] = int(np.clip(st.session_state[state_key], 1, result.n_segments))
 
         st.subheader("Selector axial interactivo")
-        slider_value = st.select_slider(
-            "Deslizador de nodos",
-            options=list(range(1, result.n_segments + 1)),
-            value=int(st.session_state[state_key]),
-            key=f"node_select_slider_{label}_{result.n_segments}",
-        )
-        st.session_state[state_key] = int(slider_value)
-
         selector_fig = node_flow_selector_figure(result, time_index, st.session_state[state_key] - 1)
         clicked = plotly_events(
             selector_fig,
@@ -667,7 +659,7 @@ with tab_nodes:
             hover_event=False,
             select_event=False,
             key=f"node_selector_plot_{label}_{time_index}_{result.n_segments}",
-            override_height=230,
+            override_height=175,
             override_width="100%",
         )
         if clicked:

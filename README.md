@@ -196,3 +196,10 @@ Las Tablas 8, 10 y 11 no publican punto de rocío ni parámetros de nubosidad, p
 La sección transversal del PTC ya no depende de Plotly para la interacción óptica. `interactive_visuals.py` genera un componente autocontenido que Streamlit incrusta mediante `streamlit.components.v1.html`. Incluye controles internos para ángulo de incidencia y posición del rayo, animación continua del rayo, modo de seguidor de rayo y mapa de calor óptico alrededor de la circunferencia del absorbedor. No requiere paquetes JavaScript externos ni npm.
 
 El mapa de calor representa distribución óptica estimada de la potencia absorbida, no una solución CFD de temperatura circunferencial.
+
+## Ajuste visual 27-08-2026 · circuito y selector axial
+
+- Corregido el sentido visual del flujo `absorbedor -> HTF`: en el solver `Qfluid > 0` representa calor que sale del absorbedor y entra al fluido.
+- Circuito térmico con estética de esquema eléctrico: cables rectos, resistencias compactas y flechas pequeñas al costado de cada resistencia.
+- Selector axial sin slider: únicamente volúmenes grises grandes y clickeables, con `ΔH` y la flecha de transporte dentro de cada volumen.
+- Mapa de calor óptico reforzado visualmente con una banda térmica más gruesa sobre el absorbedor.

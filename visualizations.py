@@ -921,96 +921,51 @@ def comparative_overview(results: Mapping[str, SimulationResult]) -> go.Figure:
 
 
 def node_flow_selector_figure(result: SimulationResult, time_index: int, selected_node: int) -> go.Figure:
-    """Selector axial compacto con nodos clickeables y flujo entre volúmenes.
+    """Selector axial compacto: volúmenes grises contiguos y clickeables.
 
-    Cada marcador representa un volumen axial. Entre nodos consecutivos se
-    visualiza el transporte entálpico del HTF; además, el color de cada nodo se
-    asocia al calor radial absorbido por el fluido en ese volumen.
+    Cada cuadrado representa un volumen de control. La flecha y el valor dentro
+    del cuadrado muestran el transporte entálpico axial del HTF asociado al
+    volumen; el clic se captura en Streamlit mediante streamlit-plotly-events.
     """
     k = int(np.clip(time_index, 0, len(result.t_s) - 1))
     n = result.n_segments
+    selected = int(np.clip(selected_node, 0, n - 1))
     length = float(result.config["geometry"]["L"])
-    x = (np.arange(n) + 0.5) * length / n
-    q_htf = np.asarray(result.node_diag["Qfluid_W"][k, :], dtype=float)
+    dx = length / max(n, 1)
+    x_center = (np.arange(n) + 0.5) * dx
+    q_to_htf = np.asarray(result.node_diag["Qfluid_W"][k, :], dtype=float)
     dH = -np.asarray(result.node_diag["Qadvection_W"][k, :], dtype=float)
     tf = np.asarray(result.Tf_C[k, :], dtype=float)
 
+    arrows = np.where(dH >= 0.0, "→", "←")
+    labels = [f"{i+1}<br>{arrows[i]} {abs(dH[i]):.0f} W" for i in range(n)]
+    fills = ["#eef1f4"] * n
+    fills[selected] = "#cbd2d9"
+    borders = ["#c7ced6"] * n
+    borders[selected] = "#111827"
+    border_widths = [1.0] * n
+    border_widths[selected] = 2.6
+
     fig = go.Figure()
-
-    # Línea base del receptor.
     fig.add_trace(
         go.Scatter(
-            x=[0.0, length], y=[0.0, 0.0],
-            mode="lines",
-            line={"color": "rgba(90,90,90,0.35)", "width": 7},
-            hoverinfo="skip",
-            showlegend=False,
-        )
-    )
-
-    if n > 1:
-        for i in range(n - 1):
-            x0 = x[i]
-            x1 = x[i + 1]
-            q_link = 0.5 * (dH[i] + dH[i + 1])
-            color = "rgba(244,106,38,0.85)" if q_link >= 0.0 else "rgba(59,130,246,0.85)"
-            fig.add_annotation(
-                x=x1 - 0.03 * length / max(n, 2),
-                y=0.16,
-                ax=x0 + 0.03 * length / max(n, 2),
-                ay=0.16,
-                xref="x",
-                yref="y",
-                axref="x",
-                ayref="y",
-                showarrow=True,
-                arrowhead=3,
-                arrowsize=1.1,
-                arrowwidth=2.0,
-                arrowcolor=color,
-                text="",
-            )
-            fig.add_annotation(
-                x=0.5 * (x0 + x1),
-                y=0.24,
-                xref="x",
-                yref="y",
-                showarrow=False,
-                text=f"ΔH {q_link:.1f} W",
-                font={"size": 10, "color": "#334155"},
-                bgcolor="rgba(255,255,255,0.86)",
-                bordercolor="rgba(148,163,184,0.5)",
-                borderpad=2,
-            )
-
-    marker_sizes = np.full(n, 20.0)
-    marker_sizes[int(np.clip(selected_node, 0, n - 1))] = 30.0
-    marker_lines = ["#334155"] * n
-    marker_line_widths = [1.5] * n
-    marker_lines[int(np.clip(selected_node, 0, n - 1))] = "#111827"
-    marker_line_widths[int(np.clip(selected_node, 0, n - 1))] = 3.0
-
-    fig.add_trace(
-        go.Scatter(
-            x=x,
+            x=x_center,
             y=np.zeros(n),
             mode="markers+text",
-            text=[str(i + 1) for i in range(n)],
+            text=labels,
             textposition="middle center",
-            customdata=np.column_stack([np.arange(1, n + 1), q_htf, dH, tf]),
+            textfont={"size": 11, "color": "#27313d"},
+            customdata=np.column_stack([np.arange(1, n + 1), q_to_htf, dH, tf, x_center]),
             marker={
-                "size": marker_sizes.tolist(),
-                "color": q_htf,
-                "colorscale": "Turbo",
-                "showscale": True,
-                "colorbar": {"title": "Q abs→HTF (W)", "thickness": 12},
-                "line": {"width": marker_line_widths, "color": marker_lines},
-                "cmin": float(np.nanmin(q_htf)) if np.any(np.isfinite(q_htf)) else 0.0,
-                "cmax": float(np.nanmax(q_htf)) if np.any(np.isfinite(q_htf)) else 1.0,
+                "symbol": "square",
+                "size": 68,
+                "color": fills,
+                "line": {"color": borders, "width": border_widths},
             },
             hovertemplate=(
-                "<b>Nodo axial %{customdata[0]:.0f}</b><br>"
-                "Q abs→HTF = %{customdata[1]:.2f} W<br>"
+                "<b>Nodo %{customdata[0]:.0f}</b><br>"
+                "x = %{customdata[4]:.3f} m<br>"
+                "Q absorbedor→HTF = %{customdata[1]:.2f} W<br>"
                 "ΔH axial = %{customdata[2]:.2f} W<br>"
                 "T agua = %{customdata[3]:.2f} °C<extra></extra>"
             ),
@@ -1019,34 +974,28 @@ def node_flow_selector_figure(result: SimulationResult, time_index: int, selecte
     )
 
     fig.add_annotation(
-        x=x[int(np.clip(selected_node, 0, n - 1))],
-        y=-0.18,
-        xref="x",
-        yref="y",
-        text=f"Nodo activo: {int(np.clip(selected_node, 0, n - 1)) + 1}",
+        x=x_center[selected],
+        y=-0.62,
+        text=f"Nodo {selected + 1}",
         showarrow=False,
-        font={"size": 12, "color": "#111827"},
-        bgcolor="rgba(255,255,255,0.9)",
-        bordercolor="rgba(17,24,39,0.3)",
-        borderpad=3,
+        font={"size": 11, "color": "#111827"},
     )
-
-    fig.update_xaxes(title_text="Posición axial x (m)", range=[-0.03 * length, 1.03 * length])
-    fig.update_yaxes(visible=False, range=[-0.28, 0.36], fixedrange=True)
+    fig.update_xaxes(
+        visible=False,
+        range=[-0.05 * dx, length + 0.05 * dx],
+        fixedrange=True,
+    )
+    fig.update_yaxes(visible=False, range=[-0.82, 0.82], fixedrange=True)
     fig.update_layout(
-        height=220,
-        margin={"l": 10, "r": 10, "t": 40, "b": 10},
-        title={"text": "Deslizador axial clickeable y flujo entre nodos", "x": 0.5, "font": {"size": 17}},
+        height=175,
+        margin={"l": 8, "r": 8, "t": 10, "b": 4},
         template="plotly_white",
-        hovermode="closest",
         paper_bgcolor="white",
         plot_bgcolor="white",
-        font={"color": "#111827"},
+        hovermode="closest",
+        dragmode=False,
     )
     return fig
-
-
-# ---- Ray tracing helpers ----------------------------------------------------
 
 def _normalize(vector: np.ndarray) -> np.ndarray:
     norm = float(np.linalg.norm(vector))

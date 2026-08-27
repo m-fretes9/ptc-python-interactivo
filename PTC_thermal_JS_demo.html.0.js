@@ -1,45 +1,4 @@
-<!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8" />
-<style>
-:root{--ink:#151b26;--muted:#64748b;--wire:#1d2430;--flow:#ff5a4f;--solar:#f59e0b;--border:#e4e8ee}
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;background:transparent;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--ink)}
-.card{background:#fff;border:1px solid var(--border);border-radius:16px;overflow:hidden}
-.head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #eef1f5}
-.title{font-size:15px;font-weight:720} .meta{font-size:11px;color:var(--muted)}
-.scene{padding:2px 8px 0;background:#fff}
-svg{width:100%;height:480px;display:block}
-.wire{fill:none;stroke:var(--wire);stroke-width:2.15;stroke-linecap:round;stroke-linejoin:round}
-.resistor{fill:none;stroke:var(--wire);stroke-width:2.35;stroke-linecap:round;stroke-linejoin:round}
-.node{fill:var(--wire)}
-.node-name{font-size:11px;font-weight:730;fill:#111827}
-.node-temp{font-size:10px;fill:#64748b}
-.branch-name{font-size:10.5px;font-weight:700;fill:#334155}
-.branch-value{font-size:9.5px;fill:#64748b}
-.flow{fill:none;stroke:var(--flow);stroke-width:1.55;stroke-linecap:round}
-.flow-dot{fill:var(--flow)}
-.solar{fill:none;stroke:var(--solar);stroke-width:2}
-.solar-label{font-size:10.5px;font-weight:720;fill:#9a5b00}
-.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;padding:0 14px 13px}
-.metric{border:1px solid #e8edf3;border-radius:10px;padding:7px 9px;background:#fff}
-.k{font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.035em} .v{font-size:13px;font-weight:720;margin-top:2px}
-@media(max-width:900px){svg{height:440px}.summary{grid-template-columns:repeat(2,1fr)}}
-</style>
-</head>
-<body>
-<div class="card">
-  <div class="head"><div class="title">Circuito térmico · nodo axial 1</div><div class="meta">LAT 16.000 h</div></div>
-  <div class="scene"><svg id="circuit" viewBox="0 0 1180 500" preserveAspectRatio="xMidYMid meet"></svg></div>
-  <div class="summary">
-    <div class="metric"><div class="k">Q solar / nodo</div><div class="v">129.96 W</div></div>
-    <div class="metric"><div class="k">Absorbedor → HTF</div><div class="v">92.50 W</div></div>
-    <div class="metric"><div class="k">ΔH axial HTF</div><div class="v">92.50 W</div></div>
-    <div class="metric"><div class="k">Pérdida exterior</div><div class="v">37.45 W</div></div>
-  </div>
-</div>
-<script>
+
 const D={"hasGlass": false, "node": 1, "LAT": 16.0, "T": {"Tagua": 26.152459201325485, "TabsI": 92.9622659689415, "TabsE": 92.9622659689415, "TvidI": 25.0, "TvidE": 25.0, "Tamb": 25.0, "Tsky": 9.395194943800902}, "R": {"r12": 0.7221418768485323, "r23": 0.00018381272868750226, "r34rad": 0.0, "r34conv": 0.0, "r45": null, "r56": 2.7804609152879927, "r57": 6.42292125730376}, "Q": {"q12dir": -92.50440552698993, "q23dir": -92.50440552698993, "q12": 92.50440552698993, "q23": 92.50440552698993, "q34radDir": 0.0, "q34convDir": 0.0, "q45Dir": 37.45356323793108, "q56Dir": 24.44280572161977, "q57Dir": 13.01075751631131, "q34rad": 0.0, "q34conv": 0.0, "q45": 37.45356323793108, "q56": 24.44280572161977, "q57": 13.01075751631131, "qsolar": 129.95837708333335, "qsupports": 0.0, "qdh": 92.50435288231608}}, svg=document.getElementById('circuit'), NS='http://www.w3.org/2000/svg';
 function E(tag,a={}){const e=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(a))e.setAttribute(k,v);return e;}
 function add(tag,a={},parent=svg){const e=E(tag,a);parent.appendChild(e);return e;}
@@ -116,5 +75,3 @@ if(D.hasGlass){
   branch(C,N.n6,'Convección → ambiente',D.R.r56,D.Q.q56Dir,D.Q.q56,-1);
   node(N.n1,'Tagua',D.T.Tagua,1,'start');node(N.n2,'Tabs,int',D.T.TabsI,2);node(N.n3,'Tabs,ext',D.T.TabsE,3);node(N.n6,'Tamb',D.T.Tamb,6,'end');node(N.n7,'Tsky',D.T.Tsky,7,'end');
 }
-</script>
-</body></html>
