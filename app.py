@@ -12,15 +12,10 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-try:
-    from streamlit_plotly_events import plotly_events
-    HAS_PLOTLY_EVENTS = True
-except Exception:
-    plotly_events = None
-    HAS_PLOTLY_EVENTS = False
+from streamlit_plotly_events import plotly_events
 
 from defaults import default_config, default_fluid_database
-from interactive_visuals import ptc_optical_component_html
+from interactive_visuals import ptc_optical_component_html, thermal_circuit_component_html
 from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_summary_rows
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
@@ -40,8 +35,6 @@ from visualizations import (
     node_balance,
     node_flow_selector_figure,
     property_figure,
-    ptc_schematic,
-    thermal_resistance_network,
     validation_bhambare_figure,
     validation_tcc_figure,
 )
@@ -266,21 +259,21 @@ def representative_time_index(result: SimulationResult) -> tuple[int, str]:
     dni_series = np.asarray(result.scalar_diag["DNI_W_m2"], dtype=float)
     finite_idx = np.flatnonzero(np.isfinite(dni_series))
     if finite_idx.size == 0:
-        return len(result.t_s) - 1, "Estado final (DNI no disponible)."
+        return len(result.t_s) - 1, "Estado final"
 
     dni_valid = dni_series[finite_idx]
     dni_scale = max(float(np.nanmax(np.abs(dni_valid))), 1.0)
     dni_is_constant = float(np.nanmax(dni_valid) - np.nanmin(dni_valid)) <= 1e-8 * dni_scale
     if dni_is_constant:
-        return int(finite_idx[-1]), "Estado final: DNI constante; se evita el punto inicial transitorio."
+        return int(finite_idx[-1]), "Estado final"
 
     max_dni = float(np.nanmax(dni_valid))
     peak_candidates = finite_idx[
         np.isclose(dni_series[finite_idx], max_dni, rtol=1e-10, atol=1e-9)
     ]
     if peak_candidates.size:
-        return int(peak_candidates[-1]), "Último instante correspondiente al DNI máximo."
-    return int(finite_idx[np.nanargmax(dni_valid)]), "Instante de DNI máximo."
+        return int(peak_candidates[-1]), "DNI máximo"
+    return int(finite_idx[np.nanargmax(dni_valid)]), "DNI máximo"
 
 
 initialize_state()
@@ -288,11 +281,6 @@ cfg = st.session_state.config
 fluid_db = st.session_state.fluid_database
 
 st.title("Modelo nodal de colector cilindro-parabólico")
-st.caption(
-    "Migración del modelo MATLAB a Python con solver BDF, propiedades dependientes de la temperatura, "
-    "edición de parámetros y visualización térmica nodo por nodo."
-)
-
 with st.sidebar:
     st.header("Configuración")
 
@@ -582,8 +570,7 @@ with tab_sim:
     if result is None:
         st.info("Configure el caso y pulse Ejecutar simulación.")
     else:
-        k_ref, ref_caption = representative_time_index(result)
-        kpi_caption = f"KPIs: {ref_caption}"
+        k_ref, _ = representative_time_index(result)
 
         cols = st.columns(6)
         cols[0].metric("DNI", f"{result.scalar_diag['DNI_W_m2'][k_ref]:.1f} W/m²")
@@ -592,7 +579,6 @@ with tab_sim:
         cols[3].metric("Q útil", f"{result.scalar_diag['Quseful_W'][k_ref]:.1f} W")
         cols[4].metric("Q pérdidas", f"{result.scalar_diag['Qloss_W'][k_ref]:.1f} W")
         cols[5].metric("η térmica HTF", f"{result.scalar_diag['eta_pct'][k_ref]:.2f} %")
-        st.caption(kpi_caption)
         qinc = np.asarray(result.scalar_diag["Qincident_W"], dtype=float)
         quse = np.asarray(result.scalar_diag["Quseful_W"], dtype=float)
         einc = integrate_trapezoid(qinc, result.t_s) if len(result.t_s) > 1 else float("nan")
@@ -607,12 +593,6 @@ with tab_sim:
         diag_cols[1].metric("η integrada del período", f"{eta_period:.2f} %")
         diag_cols[2].metric("Re salida", f"{re_out:.0f}")
         diag_cols[3].metric("Régimen salida", regime)
-        if regime == "transición":
-            st.info(
-                f"La salida está en régimen transicional ({re_lam:.0f} < Re < {re_turb:.0f}). "
-                "El modelo usa una transición continua de Nusselt; no una conmutación abrupta."
-            )
-
         result_meta = result.config.get("preset_meta", {})
         source_ref = result_meta.get("reference", {})
         if source_ref:
@@ -656,7 +636,7 @@ with tab_nodes:
     if result is None:
         st.info("Primero ejecute una simulación.")
     else:
-        node_default_index, node_default_caption = representative_time_index(result)
+        node_default_index, _ = representative_time_index(result)
         time_index = st.slider(
             "Instante de análisis",
             min_value=0,
@@ -665,8 +645,6 @@ with tab_nodes:
             format="índice %d",
             key=f"node_time_index_{label}",
         )
-        st.caption(f"Selección inicial del análisis nodal: {node_default_caption}")
-
         state_key = f"selected_node_{label}"
         if state_key not in st.session_state:
             st.session_state[state_key] = min(1, result.n_segments)
@@ -674,11 +652,6 @@ with tab_nodes:
             st.session_state[state_key] = int(np.clip(st.session_state[state_key], 1, result.n_segments))
 
         st.subheader("Selector axial interactivo")
-        st.caption(
-            "Puedes elegir el volumen axial con el deslizador clickeable o, si está disponible "
-            "la extensión streamlit-plotly-events, haciendo clic sobre un nodo del esquema."
-        )
-
         slider_value = st.select_slider(
             "Deslizador de nodos",
             options=list(range(1, result.n_segments + 1)),
@@ -688,27 +661,21 @@ with tab_nodes:
         st.session_state[state_key] = int(slider_value)
 
         selector_fig = node_flow_selector_figure(result, time_index, st.session_state[state_key] - 1)
-        if HAS_PLOTLY_EVENTS and plotly_events is not None:
-            clicked = plotly_events(
-                selector_fig,
-                click_event=True,
-                hover_event=False,
-                select_event=False,
-                key=f"node_selector_plot_{label}_{time_index}_{result.n_segments}",
-                override_height=230,
-                override_width="100%",
-            )
-            if clicked:
-                candidate = int(clicked[0].get("pointNumber", 0)) + 1
-                candidate = int(np.clip(candidate, 1, result.n_segments))
-                if candidate != st.session_state[state_key]:
-                    st.session_state[state_key] = candidate
-                    st.rerun()
-        else:
-            st.plotly_chart(selector_fig, use_container_width=True)
-            st.info(
-                "Sugerencia: instala 'streamlit-plotly-events' para poder seleccionar el nodo axial con un clic sobre el gráfico."
-            )
+        clicked = plotly_events(
+            selector_fig,
+            click_event=True,
+            hover_event=False,
+            select_event=False,
+            key=f"node_selector_plot_{label}_{time_index}_{result.n_segments}",
+            override_height=230,
+            override_width="100%",
+        )
+        if clicked:
+            candidate = int(clicked[0].get("pointNumber", 0)) + 1
+            candidate = int(np.clip(candidate, 1, result.n_segments))
+            if candidate != st.session_state[state_key]:
+                st.session_state[state_key] = candidate
+                st.rerun()
 
         node_number = int(st.session_state[state_key])
         node_index = node_number - 1
@@ -733,19 +700,18 @@ with tab_nodes:
         )
 
         st.subheader("Sección transversal interactiva del PTC")
-        st.caption(
-            "Nueva visualización hecha en HTML + CSS + JavaScript puro. Los controles funcionan dentro del gráfico, "
-            "sin recalcular el solver ni recargar Streamlit."
+        components.html(
+            ptc_optical_component_html(result.config, snapshot, node_index),
+            height=735,
+            scrolling=False,
         )
-        top_left, top_right = st.columns([1.12, 0.88])
-        with top_left:
-            components.html(
-                ptc_optical_component_html(result.config, snapshot, node_index),
-                height=735,
-                scrolling=False,
-            )
-        with top_right:
-            st.plotly_chart(thermal_resistance_network(snapshot, result.config), use_container_width=True)
+
+        st.subheader("Circuito térmico")
+        components.html(
+            thermal_circuit_component_html(result.config, snapshot),
+            height=690,
+            scrolling=False,
+        )
 
         st.plotly_chart(axial_profiles(result, time_index), use_container_width=True)
         left, right = st.columns([1.1, 0.9])

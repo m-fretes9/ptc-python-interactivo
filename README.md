@@ -1,6 +1,6 @@
 # PTC nodal en Python
 
-Aplicación interactiva para simular un colector solar cilindro-parabólico con discretización axial y red térmica radial. Es la migración del modelo MATLAB `Simulacion_Comparativa_PTC.m` e incorpora:
+Aplicación interactiva para simular un colector solar cilindro-parabólico con discretización axial y red térmica radial. Incluye:
 
 - balance transitorio de HTF, absorbedor y cubierta de vidrio en cada nodo;
 - propiedades `rho(T)`, `mu(T)`, `Cp(T)` y `k(T)`;
@@ -135,7 +135,7 @@ La prueba ejecuta un caso corto sin abrir Streamlit.
 
 ## Nota sobre equivalencia numérica
 
-Las ecuaciones, parámetros predeterminados y lógica de cálculo corresponden al MATLAB refactorizado. `ode15s` no existe en SciPy; se usa `solve_ivp(method="BDF")`, que pertenece a la misma familia de integradores implícitos para sistemas rígidos. Por ello, pequeñas diferencias numéricas son normales aunque el modelo físico sea el mismo.
+El modelo dinámico se integra con `solve_ivp(method="BDF")` y mantiene propiedades termofísicas dependientes de la temperatura.
 
 
 ## Revisión de régimen para agua

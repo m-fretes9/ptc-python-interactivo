@@ -1,0 +1,66 @@
+
+const D={"hasGlass": true, "node": 2, "LAT": 8.0, "T": {"Tagua": 31.899999999999977, "TabsI": 31.899999999999977, "TabsE": 31.899999999999977, "TvidI": 31.899999999999977, "TvidE": 31.899999999999977, "Tamb": 31.899999999999977, "Tsky": 19.520567389176392}, "R": {"r12": 0.5879859109196776, "r23": 3.7013171701439565e-05, "r34rad": null, "r34conv": null, "r45": 0.017086639629097063, "r56": null, "r57": 1.036810401854728}, "Q": {"q12": 0.0, "q23": 0.0, "q34rad": 0.0, "q34conv": 0.0, "q45": 11.939919380320918, "q56": 0.0, "q57": 11.939919380320918, "qsolar": 413.05120960038823, "qsupports": 0.0, "qdh": -0.0}}, svg=document.getElementById('circuit'), NS='http://www.w3.org/2000/svg';
+function E(tag,a={}){const e=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(a))e.setAttribute(k,v);return e;}
+function add(tag,a={},parent=svg){const e=E(tag,a);parent.appendChild(e);return e;}
+function txt(x,y,text,cls,anchor='middle'){const e=add('text',{x,y,class:cls,'text-anchor':anchor});e.textContent=text;return e;}
+function fmtR(v){return (v===null||!Number.isFinite(v))?'∞':(Math.abs(v)>=1000?v.toExponential(2):v.toPrecision(4))+' K/W';}
+function fmtQ(v){return `${v.toFixed(2)} W`;}
+
+const defs=add('defs');
+const marker=add('marker',{id:'arrowFlow',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto-start-reverse'},defs);
+add('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#ef4444'},marker);
+const markerSolar=add('marker',{id:'arrowSolar',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto'},defs);
+add('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#f59e0b'},markerSolar);
+
+function wire(x1,y1,x2,y2){add('path',{d:`M${x1},${y1} L${x2},${y2}`,class:'wire'});}
+function resistorPath(x1,y1,x2,y2,teeth=7){
+  const dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L,nx=-uy,ny=ux;
+  const lead=Math.min(20,L*.14), amp=Math.min(13,L*.11), usable=L-2*lead;
+  let d=`M ${x1} ${y1} L ${x1+lead*ux} ${y1+lead*uy}`;
+  const pts=teeth*2;
+  for(let i=1;i<=pts;i++){const s=lead+usable*i/(pts+1),off=(i%2?amp:-amp);d+=` L ${x1+s*ux+off*nx} ${y1+s*uy+off*ny}`;}
+  d+=` L ${x2-lead*ux} ${y2-lead*uy} L ${x2} ${y2}`;return d;
+}
+function resistor(x1,y1,x2,y2){add('path',{d:resistorPath(x1,y1,x2,y2),class:'resistor'});}
+function node(x,y,name,temp,num){
+  add('circle',{cx:x,cy:y,r:17,class:'node-halo'});add('circle',{cx:x,cy:y,r:6,class:'node'});
+  txt(x,y-29,name,'node-name');txt(x,y-15,`${temp.toFixed(2)} °C`,'node-temp');txt(x,y+34,`(${num})`,'node-temp');
+}
+function flowArrow(x1,y1,x2,y2,q,offset=24){
+  const dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy)||1,nx=-dy/L,ny=dx/L;
+  let a=[x1+nx*offset,y1+ny*offset],b=[x2+nx*offset,y2+ny*offset];
+  if(q<0){const t=a;a=b;b=t;}
+  const p=add('path',{d:`M ${a[0]} ${a[1]} L ${b[0]} ${b[1]}`,class:'flow-line','marker-end':'url(#arrowFlow)'});
+  const dot=add('circle',{r:4,class:'flow-dot'});
+  add('animateMotion',{dur:`${Math.max(1.2,2.8-Math.min(Math.abs(q)/120,1.3))}s`,repeatCount:'indefinite',path:p.getAttribute('d')},dot);
+}
+function labelBranch(x,y,name,r,q){txt(x,y,name,'branch-label');txt(x,y+15,`R = ${fmtR(r)} · Q = ${fmtQ(q)}`,'branch-value');}
+function branch(a,b,name,r,q,offset=25,labelDy=-33){resistor(...a,...b);flowArrow(...a,...b,q,offset);labelBranch((a[0]+b[0])/2,(a[1]+b[1])/2+labelDy,name,r,q);}
+
+const N={n1:[80,300],n2:[220,300],n3:[380,300],n4:[610,300],n5:[760,300],n6:[1030,420],n7:[1030,180]};
+
+add('path',{d:`M ${N.n3[0]} 65 L ${N.n3[0]} 255`,class:'solar-line','marker-end':'url(#arrowSolar)'});
+const sdot=add('circle',{r:5,class:'solar-dot'});
+add('animateMotion',{dur:'1.8s',repeatCount:'indefinite',path:`M ${N.n3[0]} 65 L ${N.n3[0]} 248`},sdot);
+txt(N.n3[0],45,'Radiación solar','solar-label');txt(N.n3[0],61,`Q = ${fmtQ(D.Q.qsolar)}`,'branch-value');
+
+branch(N.n1,N.n2,'Convección interna',D.R.r12,D.Q.q12,27,-42);
+branch(N.n2,N.n3,'Conducción absorbedor',D.R.r23,D.Q.q23,-28,47);
+
+if(D.hasGlass){
+  wire(N.n3[0],N.n3[1],N.n3[0],180);wire(N.n4[0],N.n4[1],N.n4[0],180);
+  wire(N.n3[0],N.n3[1],N.n3[0],420);wire(N.n4[0],N.n4[1],N.n4[0],420);
+  branch([N.n3[0],180],[N.n4[0],180],'Radiación abs. → vidrio',D.R.r34rad,D.Q.q34rad,-24,-39);
+  branch([N.n3[0],420],[N.n4[0],420],'Convección anular',D.R.r34conv,D.Q.q34conv,24,47);
+  branch(N.n4,N.n5,'Conducción vidrio',D.R.r45,D.Q.q45,27,-42);
+  wire(N.n5[0],N.n5[1],N.n5[0],180);wire(N.n5[0],N.n5[1],N.n5[0],420);
+  branch([N.n5[0],180],N.n7,'Radiación → cielo',D.R.r57,D.Q.q57,-25,-39);
+  branch([N.n5[0],420],N.n6,'Convección → ambiente',D.R.r56,D.Q.q56,25,47);
+  node(...N.n1,'Tagua',D.T.Tagua,1);node(...N.n2,'Tabs,int',D.T.TabsI,2);node(...N.n3,'Tabs,ext',D.T.TabsE,3);
+  node(...N.n4,'Tvid,int',D.T.TvidI,4);node(...N.n5,'Tvid,ext',D.T.TvidE,5);node(...N.n6,'Tamb',D.T.Tamb,6);node(...N.n7,'Tsky',D.T.Tsky,7);
+} else {
+  wire(N.n3[0],N.n3[1],N.n3[0],180);wire(N.n3[0],N.n3[1],N.n3[0],420);
+  branch([N.n3[0],180],N.n7,'Radiación → cielo',D.R.r57,D.Q.q57,-25,-39);
+  branch([N.n3[0],420],N.n6,'Convección → ambiente',D.R.r56,D.Q.q56,25,47);
+  node(...N.n1,'Tagua',D.T.Tagua,1);node(...N.n2,'Tabs,int',D.T.TabsI,2);node(...N.n3,'Tabs,ext',D.T.TabsE,3);node(...N.n6,'Tamb',D.T.Tamb,6);node(...N.n7,'Tsky',D.T.Tsky,7);
+}
