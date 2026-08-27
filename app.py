@@ -12,7 +12,6 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from streamlit_plotly_events import plotly_events
 
 from defaults import default_config, default_fluid_database
 from interactive_visuals import ptc_optical_component_html, thermal_circuit_component_html
@@ -33,7 +32,6 @@ from visualizations import (
     daily_irradiance_histogram,
     dynamic_overview,
     node_balance,
-    node_flow_selector_figure,
     property_figure,
     validation_bhambare_figure,
     validation_tcc_figure,
@@ -274,6 +272,94 @@ def representative_time_index(result: SimulationResult) -> tuple[int, str]:
     if peak_candidates.size:
         return int(peak_candidates[-1]), "DNI máximo"
     return int(finite_idx[np.nanargmax(dni_valid)]), "DNI máximo"
+
+
+def render_axial_node_selector(
+    result: SimulationResult,
+    time_index: int,
+    state_key: str,
+    scenario_label: str,
+) -> int:
+    """Renderiza el selector axial con botones Streamlit estilizados como volúmenes.
+
+    Se usan botones nativos para que el clic actualice de forma fiable el estado
+    de Streamlit. La apariencia se resuelve con CSS: bloques grises contiguos,
+    flecha de transporte axial y DeltaH dentro de cada volumen.
+    """
+    n = result.n_segments
+    k = int(np.clip(time_index, 0, len(result.t_s) - 1))
+    selected = int(np.clip(st.session_state[state_key], 1, n))
+    d_h = -np.asarray(result.node_diag["Qadvection_W"][k, :], dtype=float)
+
+    safe_label = "".join(ch if ch.isalnum() else "_" for ch in str(scenario_label))[-48:]
+    shell_key = f"node_selector_shell_{safe_label}_{k}"
+
+    st.markdown(
+        f"""
+        <style>
+        .st-key-{shell_key} [data-testid="stHorizontalBlock"] {{
+            gap: 4px !important;
+        }}
+        .st-key-{shell_key} button {{
+            min-height: 92px !important;
+            height: 92px !important;
+            padding: 8px 3px !important;
+            border-radius: 5px !important;
+            border: 1px solid #cbd5e1 !important;
+            background: #e5e7eb !important;
+            color: #111827 !important;
+            box-shadow: none !important;
+            transition: background .14s ease, border-color .14s ease, transform .10s ease !important;
+        }}
+        .st-key-{shell_key} button:hover {{
+            background: #d7dce2 !important;
+            border-color: #94a3b8 !important;
+            transform: translateY(-1px);
+        }}
+        .st-key-{shell_key} button p {{
+            white-space: pre-line !important;
+            text-align: center !important;
+            line-height: 1.13 !important;
+            font-size: 12px !important;
+            font-weight: 650 !important;
+            margin: 0 !important;
+        }}
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Regla específica para el nodo activo. Se inyecta por key, sin depender
+    # de los colores de tema de Streamlit.
+    active_button_key = f"node_tile_{safe_label}_{k}_{selected}"
+    st.markdown(
+        f"""
+        <style>
+        .st-key-{active_button_key} button {{
+            background: #59616d !important;
+            color: white !important;
+            border-color: #374151 !important;
+        }}
+        .st-key-{active_button_key} button:hover {{
+            background: #4b5563 !important;
+            color: white !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key=shell_key):
+        cols = st.columns(n, gap="small")
+        for i, col in enumerate(cols):
+            q = float(d_h[i])
+            arrow = "→" if q >= 0.0 else "←"
+            label = f"{i + 1}\n{arrow}\nΔH {abs(q):.1f} W"
+            button_key = f"node_tile_{safe_label}_{k}_{i + 1}"
+            if col.button(label, key=button_key, use_container_width=True):
+                st.session_state[state_key] = i + 1
+                st.rerun()
+
+    return int(st.session_state[state_key])
 
 
 initialize_state()
@@ -652,30 +738,7 @@ with tab_nodes:
             st.session_state[state_key] = int(np.clip(st.session_state[state_key], 1, result.n_segments))
 
         st.subheader("Selector axial interactivo")
-        selector_fig = node_flow_selector_figure(result, time_index, st.session_state[state_key] - 1)
-        clicked = plotly_events(
-            selector_fig,
-            click_event=True,
-            hover_event=False,
-            select_event=False,
-            key=f"node_selector_plot_{label}_{time_index}_{result.n_segments}",
-            override_height=205,
-            override_width="100%",
-        )
-        if clicked:
-            event = clicked[0]
-            # En el selector V5 cada barra tiene x = número de nodo. Usar x es
-            # más robusto que depender de pointNumber entre versiones de Plotly.
-            raw_node = event.get("x", None)
-            if raw_node is None:
-                raw_node = int(event.get("pointNumber", 0)) + 1
-            candidate = int(round(float(raw_node)))
-            candidate = int(np.clip(candidate, 1, result.n_segments))
-            if candidate != st.session_state[state_key]:
-                st.session_state[state_key] = candidate
-                st.rerun()
-
-        node_number = int(st.session_state[state_key])
+        node_number = render_axial_node_selector(result, time_index, state_key, label)
         node_index = node_number - 1
         snapshot = result.node_snapshot(time_index, node_index)
         st.caption(f"LAT = {snapshot['LAT_h']:.3f} h; nodo {node_number}; x = {(node_index + 0.5) * result.config['geometry']['L'] / result.n_segments:.3f} m")
