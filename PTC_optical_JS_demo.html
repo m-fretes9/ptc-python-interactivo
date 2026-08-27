@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --ink:#111827; --muted:#64748b; --line:#cbd5e1; --panel:#ffffff;
+    --soft:#f8fafc; --sun:#f59e0b; --ray:#2563eb; --hot:#ef4444;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--ink)}
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:18px;overflow:hidden;box-shadow:0 8px 24px rgba(15,23,42,.05)}
+  .top{padding:14px 16px 12px;border-bottom:1px solid #eef2f7;background:linear-gradient(180deg,#fff,#fbfdff)}
+  .title{font-weight:720;font-size:16px;letter-spacing:-.01em}
+  .sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .toolbar{display:grid;grid-template-columns:auto minmax(180px,1fr) minmax(180px,1fr) auto;gap:12px;align-items:end;padding:12px 16px;background:#fbfdff;border-bottom:1px solid #eef2f7}
+  .seg{display:flex;padding:3px;background:#eef2f7;border-radius:11px;gap:2px}
+  .seg button{border:0;background:transparent;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:650;font-size:12px;color:#475569;white-space:nowrap}
+  .seg button.active{background:#fff;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12)}
+  .ctrl label{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:#475569;margin-bottom:6px}
+  .ctrl b{color:#0f172a}
+  input[type=range]{width:100%;accent-color:#111827;cursor:pointer}
+  .btn{border:1px solid #dbe3ec;background:#fff;border-radius:10px;padding:8px 11px;cursor:pointer;font-weight:650;color:#334155}
+  .btn:hover{background:#f8fafc}
+  .scene{position:relative;background:#fff;padding:8px 10px 4px}
+  svg{width:100%;height:510px;display:block}
+  .mirror{fill:none;stroke:#334155;stroke-width:4;stroke-linecap:round}
+  .glass{fill:none;stroke:#94a3b8;stroke-width:3;stroke-dasharray:7 6}
+  .absorber-base{fill:none;stroke:#111827;stroke-width:9}
+  .incoming{stroke:var(--sun);stroke-width:2.4;opacity:.92}
+  .reflected{stroke:var(--ray);stroke-width:3.0;opacity:.95}
+  .soft-ray{stroke:#2563eb;stroke-width:1;opacity:.08}
+  .hit{fill:#111827;stroke:#fff;stroke-width:1.5}
+  .focus{fill:#0f172a}
+  .travel{fill:#fff;stroke:#111827;stroke-width:2;filter:drop-shadow(0 1px 2px rgba(15,23,42,.25))}
+  .legend{position:absolute;right:22px;top:24px;width:150px;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);border:1px solid #e2e8f0;border-radius:12px;padding:10px 11px;font-size:11px;color:#475569}
+  .gradient{height:8px;border-radius:999px;margin:7px 0 4px;background:linear-gradient(90deg,#1d4ed8,#06b6d4,#fde047,#f97316,#dc2626)}
+  .metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:10px 16px 14px;background:#fff}
+  .metric{border:1px solid #e8edf3;border-radius:12px;padding:9px 10px;background:#fff}
+  .metric .k{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em}
+  .metric .v{font-size:15px;font-weight:720;margin-top:2px}
+  .note{padding:0 16px 14px;font-size:11px;color:#64748b;line-height:1.35}
+  .tiny{font-size:10px;fill:#64748b}
+  @media(max-width:850px){.toolbar{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}svg{height:450px}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="top"><div class="title">PTC · nodo axial 6 · óptica interactiva</div><div class="sub">Incidencia, reflexión y distribución óptica sobre el absorbedor</div></div>
+  <div class="toolbar">
+    <div class="seg">
+      <button id="rayBtn" class="active">Seguidor de rayo</button>
+      <button id="heatBtn">Mapa de calor</button>
+    </div>
+    <div class="ctrl"><label><span>Ángulo de incidencia</span><b id="angleOut">0.0°</b></label><input id="angle" type="range" min="-25" max="25" value="0" step="0.25"></div>
+    <div class="ctrl"><label><span>Posición del rayo en la abertura</span><b id="rayOut">50%</b></label><input id="rayPos" type="range" min="4" max="96" value="50" step="0.5"></div>
+    <button class="btn" id="playBtn">▶ Animar rayo</button>
+  </div>
+  <div class="scene">
+    <svg id="svg" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid meet">
+      <defs><clipPath id="sceneClip"><rect x="0" y="0" width="1000" height="620" rx="12"/></clipPath></defs>
+      <g id="grid" clip-path="url(#sceneClip)"></g>
+      <path id="mirror" class="mirror"></path>
+      <circle id="glass" class="glass"></circle>
+      <g id="heatArcs"></g>
+      <circle id="absorber" class="absorber-base"></circle>
+      <circle id="focus" r="4.5" class="focus"></circle>
+      <g id="rayCloud"></g>
+      <g id="singleRay"></g>
+      <circle id="travel" r="7" class="travel" style="display:none"></circle>
+      <text id="thetaText" x="22" y="28" class="tiny"></text>
+    </svg>
+    <div class="legend" id="legend"><b>Seguidor de rayo</b><div style="margin-top:5px">Amarillo: rayo incidente<br>Azul: rayo reflejado</div></div>
+  </div>
+  <div class="metrics">
+    <div class="metric"><div class="k">DNI</div><div class="v" id="dni">—</div></div>
+    <div class="metric"><div class="k">Q solar / nodo</div><div class="v" id="qsolar">—</div></div>
+    <div class="metric"><div class="k">T absorbedor</div><div class="v" id="tabs">—</div></div>
+    <div class="metric"><div class="k">Rayos que impactan</div><div class="v" id="hits">—</div></div>
+    <div class="metric"><div class="k">Pico óptico estimado</div><div class="v" id="peak">—</div></div>
+  </div>
+  <div class="note">El “mapa de calor” representa la <b>distribución óptica estimada de la potencia absorbida</b> alrededor de la circunferencia externa del absorbedor a partir de ray tracing ideal. No es un campo térmico CFD ni incluye conducción circunferencial dentro de la pared.</div>
+</div>
+<script>
+const G={"W": 1.1, "L": 2.0, "f": 0.16, "D3": 0.042, "D5": 0.07, "Nseg": 12, "hasGlass": false}, D={"node": 6, "LAT": 12.0, "theta": 12.0, "DNI": 905.0, "Qsolar": 96.4, "Tabs": 67.8, "Tglass": 25.0};
+const svg=document.getElementById('svg'), NS='http://www.w3.org/2000/svg';
+const angle=document.getElementById('angle'), rayPos=document.getElementById('rayPos');
+angle.value=Math.max(-25,Math.min(25,D.theta||0));
+let mode='ray', animHandle=null, animStart=null;
+
+// Physical coordinates: y grows upward. SVG coordinates: y grows downward.
+const xMin=-G.W*0.62, xMax=G.W*0.62;
+const yEdge=(G.W/2)**2/(4*G.f), yMax=Math.max(yEdge+0.18*G.W,G.f+0.32*G.W), yMin=-0.15*G.W;
+function sx(x){return 70+(x-xMin)/(xMax-xMin)*860;}
+function sy(y){return 570-(y-yMin)/(yMax-yMin)*500;}
+function P(x,y){return [sx(x),sy(y)];}
+function norm(v){const n=Math.hypot(v[0],v[1])||1;return [v[0]/n,v[1]/n];}
+function dot(a,b){return a[0]*b[0]+a[1]*b[1];}
+function reflect(d,n){d=norm(d);n=norm(n);const k=2*dot(d,n);return norm([d[0]-k*n[0],d[1]-k*n[1]]);}
+function parabolaY(x){return x*x/(4*G.f);}
+function intersectParabola(x0,y0,d){
+  const a=d[0]*d[0], b=2*x0*d[0]-4*G.f*d[1], c=x0*x0-4*G.f*y0;
+  let roots=[];
+  if(Math.abs(a)<1e-12){ if(Math.abs(b)>1e-12) roots=[-c/b]; } else {
+    const disc=b*b-4*a*c;if(disc>=0)roots=[(-b-Math.sqrt(disc))/(2*a),(-b+Math.sqrt(disc))/(2*a)];
+  }
+  roots=roots.filter(t=>Number.isFinite(t)&&t>=0).sort((a,b)=>a-b); if(!roots.length)return null;
+  const t=roots[0];return [x0+t*d[0],y0+t*d[1]];
+}
+function intersectCircle(o,d,c,r){
+  d=norm(d);const px=o[0]-c[0],py=o[1]-c[1];const b=2*(px*d[0]+py*d[1]);const cc=px*px+py*py-r*r;const disc=b*b-4*cc;
+  if(disc<0)return null;const roots=[(-b-Math.sqrt(disc))/2,(-b+Math.sqrt(disc))/2].filter(t=>t>1e-6).sort((a,b)=>a-b);if(!roots.length)return null;
+  return [o[0]+roots[0]*d[0],o[1]+roots[0]*d[1]];
+}
+function trace(frac,deg){
+  const th=deg*Math.PI/180, d=norm([Math.sin(th),-Math.cos(th)]), x0=(frac-.5)*G.W, y0=yMax;
+  const m=intersectParabola(x0,y0,d);if(!m||Math.abs(m[0])>G.W/2+1e-6)return null;
+  const n=norm([-m[0]/(2*G.f),1]), r=reflect(d,n), c=[0,G.f], hit=intersectCircle([m[0]+1e-7*r[0],m[1]+1e-7*r[1]],r,c,G.D3/2);
+  return {launch:[x0,y0],mirror:m,dir:d,refl:r,hit};
+}
+function el(tag,attrs={}){const e=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,v);return e;}
+function clear(id){document.getElementById(id).innerHTML='';}
+function polyline(parent,pts,cls){const p=el('polyline',{points:pts.map(q=>P(q[0],q[1]).join(',')).join(' '),fill:'none',class:cls});parent.appendChild(p);return p;}
+
+function drawBase(){
+  const xs=Array.from({length:181},(_,i)=>-G.W/2+i*G.W/180), pts=xs.map(x=>P(x,parabolaY(x)));
+  document.getElementById('mirror').setAttribute('d','M '+pts.map(p=>p.join(',')).join(' L '));
+  const c=P(0,G.f), ra=(G.D3/2)*860/(xMax-xMin), rg=(G.D5/2)*860/(xMax-xMin);
+  for(const id of ['absorber','glass']){document.getElementById(id).setAttribute('cx',c[0]);document.getElementById(id).setAttribute('cy',c[1]);}
+  document.getElementById('absorber').setAttribute('r',ra);document.getElementById('glass').setAttribute('r',rg);
+  document.getElementById('glass').style.display=G.hasGlass?'block':'none';
+  document.getElementById('focus').setAttribute('cx',c[0]);document.getElementById('focus').setAttribute('cy',c[1]);
+  const grid=document.getElementById('grid');grid.innerHTML='';
+  for(let i=0;i<8;i++){const y=70+i*62;grid.appendChild(el('line',{x1:55,y1:y,x2:945,y2:y,stroke:'#f1f5f9','stroke-width':1}));}
+}
+function colorScale(t){t=Math.max(0,Math.min(1,t));const stops=[[29,78,216],[6,182,212],[253,224,71],[249,115,22],[220,38,38]];const z=t*(stops.length-1),i=Math.min(stops.length-2,Math.floor(z)),f=z-i,a=stops[i],b=stops[i+1];return `rgb(${Math.round(a[0]+f*(b[0]-a[0]))},${Math.round(a[1]+f*(b[1]-a[1]))},${Math.round(a[2]+f*(b[2]-a[2]))})`;}
+function arcPath(cx,cy,r,a0,a1){const p0=[cx+r*Math.cos(a0),cy-r*Math.sin(a0)],p1=[cx+r*Math.cos(a1),cy-r*Math.sin(a1)];return `M ${p0[0]} ${p0[1]} A ${r} ${r} 0 0 0 ${p1[0]} ${p1[1]}`;}
+
+function renderSingle(){
+  clear('singleRay');clear('rayCloud');clear('heatArcs');
+  const frac=parseFloat(rayPos.value)/100, deg=parseFloat(angle.value), t=trace(frac,deg), g=document.getElementById('singleRay');
+  if(t){polyline(g,[t.launch,t.mirror],'incoming');const ext=t.hit||[t.mirror[0]+t.refl[0]*G.W,t.mirror[1]+t.refl[1]*G.W];polyline(g,[t.mirror,ext],'reflected');
+    const pm=P(t.mirror[0],t.mirror[1]);g.appendChild(el('circle',{cx:pm[0],cy:pm[1],r:5,fill:'#7c3aed'}));
+    if(t.hit){const ph=P(t.hit[0],t.hit[1]);g.appendChild(el('circle',{cx:ph[0],cy:ph[1],r:6,class:'hit'}));document.getElementById('hits').textContent='1 / 1';}else document.getElementById('hits').textContent='0 / 1';
+  } else document.getElementById('hits').textContent='0 / 1';
+  document.getElementById('peak').textContent='—';document.getElementById('legend').innerHTML='<b>Seguidor de rayo</b><div style="margin-top:5px">Amarillo: incidente<br>Azul: reflejado</div>';
+}
+function renderHeat(){
+  clear('singleRay');clear('rayCloud');clear('heatArcs');
+  const deg=parseFloat(angle.value), bins=72, counts=Array(bins).fill(0), cloud=document.getElementById('rayCloud');let hits=0;
+  for(let i=0;i<180;i++){const f=.03+i*.94/179,t=trace(f,deg);if(!t)continue;if(i%6===0){const e=t.hit||[t.mirror[0]+t.refl[0]*G.W*.7,t.mirror[1]+t.refl[1]*G.W*.7];polyline(cloud,[t.launch,t.mirror,e],'soft-ray');}
+    if(t.hit){hits++;let a=Math.atan2(t.hit[1]-G.f,t.hit[0]);if(a<0)a+=Math.PI*2;const b=Math.floor(a/(Math.PI*2)*bins)%bins;counts[b]++;}
+  }
+  const mx=Math.max(1,...counts), c=P(0,G.f), r=(G.D3/2)*860/(xMax-xMin), arcs=document.getElementById('heatArcs');
+  for(let b=0;b<bins;b++){const a0=b/bins*Math.PI*2,a1=(b+1)/bins*Math.PI*2,t=counts[b]/mx,p=el('path',{d:arcPath(c[0],c[1],r,a0,a1),fill:'none',stroke:colorScale(t),'stroke-width':12,'stroke-linecap':'butt'});p.appendChild(el('title'));p.firstChild.textContent=`Sector ${b+1} · intensidad relativa ${(100*t).toFixed(1)}%`;arcs.appendChild(p);}
+  document.getElementById('hits').textContent=`${hits} / 180`;
+  const dx=G.L/G.Nseg, areaSector=(Math.PI*G.D3*dx)/bins, peakW=D.Qsolar*(mx/Math.max(1,hits))/areaSector;
+  document.getElementById('peak').textContent=Number.isFinite(peakW)?`${peakW.toFixed(0)} W/m²`:'—';
+  document.getElementById('legend').innerHTML='<b>Distribución óptica relativa</b><div class="gradient"></div><div style="display:flex;justify-content:space-between"><span>baja</span><span>alta</span></div>';
+}
+function update(){
+  const deg=parseFloat(angle.value);document.getElementById('angleOut').textContent=deg.toFixed(2)+'°';document.getElementById('rayOut').textContent=parseFloat(rayPos.value).toFixed(1)+'%';document.getElementById('thetaText').textContent=`θ = ${deg.toFixed(2)}° · posición = ${parseFloat(rayPos.value).toFixed(1)}%`;
+  document.getElementById('dni').textContent=`${D.DNI.toFixed(1)} W/m²`;document.getElementById('qsolar').textContent=`${D.Qsolar.toFixed(2)} W`;document.getElementById('tabs').textContent=`${D.Tabs.toFixed(2)} °C`;
+  if(mode==='ray')renderSingle();else renderHeat();
+}
+function setMode(m){mode=m;document.getElementById('rayBtn').classList.toggle('active',m==='ray');document.getElementById('heatBtn').classList.toggle('active',m==='heat');document.getElementById('rayPos').disabled=(m==='heat');document.getElementById('playBtn').disabled=(m==='heat');document.getElementById('travel').style.display='none';if(animHandle)cancelAnimationFrame(animHandle);animHandle=null;update();}
+function animateRay(){
+  if(mode!=='ray')return;const t=trace(parseFloat(rayPos.value)/100,parseFloat(angle.value));if(!t)return;const pts=t.hit?[t.launch,t.mirror,t.hit]:[t.launch,t.mirror,[t.mirror[0]+t.refl[0]*G.W,t.mirror[1]+t.refl[1]*G.W]];const scr=pts.map(q=>P(q[0],q[1]));const lens=[Math.hypot(scr[1][0]-scr[0][0],scr[1][1]-scr[0][1]),Math.hypot(scr[2][0]-scr[1][0],scr[2][1]-scr[1][1])], total=lens[0]+lens[1];const dot=document.getElementById('travel');dot.style.display='block';animStart=null;if(animHandle)cancelAnimationFrame(animHandle);
+  function step(ts){if(animStart===null)animStart=ts;const u=((ts-animStart)%2200)/2200,dist=u*total;let p;if(dist<=lens[0]){const f=dist/lens[0];p=[scr[0][0]+f*(scr[1][0]-scr[0][0]),scr[0][1]+f*(scr[1][1]-scr[0][1])];}else{const f=(dist-lens[0])/lens[1];p=[scr[1][0]+f*(scr[2][0]-scr[1][0]),scr[1][1]+f*(scr[2][1]-scr[1][1])];}dot.setAttribute('cx',p[0]);dot.setAttribute('cy',p[1]);animHandle=requestAnimationFrame(step);}
+  animHandle=requestAnimationFrame(step);
+}
+document.getElementById('rayBtn').onclick=()=>setMode('ray');document.getElementById('heatBtn').onclick=()=>setMode('heat');angle.oninput=update;rayPos.oninput=update;document.getElementById('playBtn').onclick=animateRay;
+drawBase();update();
+</script>
+</body></html>

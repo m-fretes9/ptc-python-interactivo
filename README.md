@@ -183,3 +183,16 @@ En `Operación y ambiente` se puede escoger entre el modelo de Rea Quille y el m
 Las Tablas 8, 10 y 11 no publican punto de rocío ni parámetros de nubosidad, por lo que los presets de Rea usan `Tdp = 15 °C` y cielo claro como hipótesis explícita editable. El modo de nubosidad queda desactivado hasta disponer de esos datos.
 
 **Advertencia documental:** la Ec. (13) impresa en el TCC contiene `(1 + eps0)` y el texto indica a la vez que `f_nuvem = 0` representa cielo totalmente nublado. Esas dos afirmaciones no son consistentes entre sí. La app conserva la ecuación impresa como opción literal y ofrece una variante `(1 - eps0)` únicamente para sensibilidad, claramente identificada como tal.
+
+## Mejora visual 27-08-2026
+
+- Sección transversal del PTC con dos modos: **Mapa de calor** y **Seguidor de rayo**.
+- Selector axial con **deslizador clickeable** y gráfico auxiliar con nodos seleccionables por clic (si está instalada la dependencia `streamlit-plotly-events`).
+- Circuito térmico mejorado con **flechas de flujo**, entrada de **radiación solar**, y nodos nombrados como `Tagua`, `Tabs,int`, `Tabs,ext`, `Tvid,int`, `Tvid,ext`, `Tamb` y `Tsky`.
+- Se añadió `requirements.txt` para facilitar el despliegue en Streamlit Cloud / GitHub.
+
+## Interfaz óptica HTML/CSS/JavaScript (27-08-2026)
+
+La sección transversal del PTC ya no depende de Plotly para la interacción óptica. `interactive_visuals.py` genera un componente autocontenido que Streamlit incrusta mediante `streamlit.components.v1.html`. Incluye controles internos para ángulo de incidencia y posición del rayo, animación continua del rayo, modo de seguidor de rayo y mapa de calor óptico alrededor de la circunferencia del absorbedor. No requiere paquetes JavaScript externos ni npm.
+
+El mapa de calor representa distribución óptica estimada de la potencia absorbida, no una solución CFD de temperatura circunferencial.

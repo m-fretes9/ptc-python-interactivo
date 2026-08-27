@@ -10,8 +10,17 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
+
+try:
+    from streamlit_plotly_events import plotly_events
+    HAS_PLOTLY_EVENTS = True
+except Exception:
+    plotly_events = None
+    HAS_PLOTLY_EVENTS = False
 
 from defaults import default_config, default_fluid_database
+from interactive_visuals import ptc_optical_component_html
 from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_summary_rows
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
@@ -29,6 +38,7 @@ from visualizations import (
     daily_irradiance_histogram,
     dynamic_overview,
     node_balance,
+    node_flow_selector_figure,
     property_figure,
     ptc_schematic,
     thermal_resistance_network,
@@ -66,6 +76,8 @@ def initialize_state() -> None:
         st.session_state.preset_month_selector = 1
     if "preset_use_annual" not in st.session_state:
         st.session_state.preset_use_annual = False
+    if "ray_seed" not in st.session_state:
+        st.session_state.ray_seed = 0
 
 
 def integrate_trapezoid(y: np.ndarray, x: np.ndarray) -> float:
@@ -654,14 +666,55 @@ with tab_nodes:
             key=f"node_time_index_{label}",
         )
         st.caption(f"Selección inicial del análisis nodal: {node_default_caption}")
-        node_number = st.slider("Nodo axial", min_value=1, max_value=result.n_segments, value=min(1, result.n_segments))
+
+        state_key = f"selected_node_{label}"
+        if state_key not in st.session_state:
+            st.session_state[state_key] = min(1, result.n_segments)
+        else:
+            st.session_state[state_key] = int(np.clip(st.session_state[state_key], 1, result.n_segments))
+
+        st.subheader("Selector axial interactivo")
+        st.caption(
+            "Puedes elegir el volumen axial con el deslizador clickeable o, si está disponible "
+            "la extensión streamlit-plotly-events, haciendo clic sobre un nodo del esquema."
+        )
+
+        slider_value = st.select_slider(
+            "Deslizador de nodos",
+            options=list(range(1, result.n_segments + 1)),
+            value=int(st.session_state[state_key]),
+            key=f"node_select_slider_{label}_{result.n_segments}",
+        )
+        st.session_state[state_key] = int(slider_value)
+
+        selector_fig = node_flow_selector_figure(result, time_index, st.session_state[state_key] - 1)
+        if HAS_PLOTLY_EVENTS and plotly_events is not None:
+            clicked = plotly_events(
+                selector_fig,
+                click_event=True,
+                hover_event=False,
+                select_event=False,
+                key=f"node_selector_plot_{label}_{time_index}_{result.n_segments}",
+                override_height=230,
+                override_width="100%",
+            )
+            if clicked:
+                candidate = int(clicked[0].get("pointNumber", 0)) + 1
+                candidate = int(np.clip(candidate, 1, result.n_segments))
+                if candidate != st.session_state[state_key]:
+                    st.session_state[state_key] = candidate
+                    st.rerun()
+        else:
+            st.plotly_chart(selector_fig, use_container_width=True)
+            st.info(
+                "Sugerencia: instala 'streamlit-plotly-events' para poder seleccionar el nodo axial con un clic sobre el gráfico."
+            )
+
+        node_number = int(st.session_state[state_key])
         node_index = node_number - 1
         snapshot = result.node_snapshot(time_index, node_index)
         st.caption(f"LAT = {snapshot['LAT_h']:.3f} h; nodo {node_number}; x = {(node_index + 0.5) * result.config['geometry']['L'] / result.n_segments:.3f} m")
 
-        # En régimen estacionario las derivadas pueden ser ~0 sin que los flujos sean 0.
-        # El calor radial absorbido por el HTF debe compensar el incremento de entalpía
-        # axial del fluido dentro del volumen de control.
         q_to_htf = float(snapshot["Qfluid_W"])
         q_htf_rise = -float(snapshot["Qadvection_W"])
         q_fluid_storage = q_to_htf - q_htf_rise
@@ -679,11 +732,21 @@ with tab_nodes:
             "En equilibrio térmico dTf/dt ≈ 0, pero ambos términos permanecen finitos y casi iguales."
         )
 
-        top_left, top_right = st.columns(2)
+        st.subheader("Sección transversal interactiva del PTC")
+        st.caption(
+            "Nueva visualización hecha en HTML + CSS + JavaScript puro. Los controles funcionan dentro del gráfico, "
+            "sin recalcular el solver ni recargar Streamlit."
+        )
+        top_left, top_right = st.columns([1.12, 0.88])
         with top_left:
-            st.plotly_chart(ptc_schematic(result.config, node_index), use_container_width=True)
+            components.html(
+                ptc_optical_component_html(result.config, snapshot, node_index),
+                height=735,
+                scrolling=False,
+            )
         with top_right:
             st.plotly_chart(thermal_resistance_network(snapshot, result.config), use_container_width=True)
+
         st.plotly_chart(axial_profiles(result, time_index), use_container_width=True)
         left, right = st.columns([1.1, 0.9])
         with left:

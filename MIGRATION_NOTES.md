@@ -1,48 +1,20 @@
-# Correspondencia MATLAB → Python
+# Cambio a visualización HTML + CSS + JavaScript — 27/08/2026
 
-| MATLAB | Python | Función |
-|---|---|---|
-| `crearConfiguracionBase` | `defaults.default_config` | Parámetros geométricos, ópticos, ambientales y del solver |
-| `propiedadesParathermNF` / `propiedadesAgua` | `fluid_properties.FluidPropertyEvaluator` | Propiedades dependientes de temperatura |
-| `modeloSolar` | `PTCSimulator.solar_model` | DNI, ángulo, IAM, pérdidas de extremo y potencia óptica |
-| `coefConveccionInterna` | `ptc_model.internal_convection` | Laminar, Dittus-Boelter y Gnielinski-Forristall |
-| `coefConveccionExterna` | `ptc_model.external_convection` | Churchill-Bernstein sobre cilindro |
-| `coefConveccionAnular` | `ptc_model.annulus_convection` | Vacío ideal, vacío efectivo o aire |
-| `calcularFlujos` | `PTCSimulator.calculate_fluxes` | Balances y flujos por nodo |
-| `rhsPTC` | `PTCSimulator.rhs` | Sistema de EDO |
-| `ode15s` | `solve_ivp(method="BDF")` | Integración rígida |
-| `validarBhambare` | `validations.validate_bhambare` | Comparación Bhambare/Sukhatme |
-| `validarTCCMensual` | `validations.validate_tcc_monthly` | Comparación mensual TCC/TRNSYS |
-| `reproducirValidacionPrototipoTCC` | `validations.prototype_tcc_table` | Tabla 8 del prototipo |
+## Por qué
+La visualización de la sección transversal del PTC pasó de Plotly a un componente web autocontenido para conseguir una interacción más limpia y dinámica, similar a los microexperimentos de Circuitos Eléctricos.
 
-## Extensiones añadidas
+## Nuevo archivo
+- `interactive_visuals.py`: genera el HTML completo que se incrusta en Streamlit.
 
-- almacenamiento de todos los flujos y resistencias por nodo y por instante;
-- selección interactiva de tiempo y nodo;
-- derivadas locales `dTf/dt`, `dTabs/dt` y `dTvid/dt`;
-- esquema del colector y su discretización axial;
-- red de resistencias actualizada con los valores del nodo seleccionado;
-- perfiles de irradiación editables;
-- tablas de propiedades editables mediante PCHIP;
-- exportación JSON, CSV y XLSX;
-- barrido comparativo de caudales.
+## Funciones nuevas
+- Slider de ángulo de incidencia en tiempo real, sin rerun de Streamlit.
+- Slider de posición del rayo sobre la abertura.
+- Animación continua del recorrido óptico.
+- Modo **Seguidor de rayo**: rayo incidente → reflexión especular → impacto en receptor.
+- Modo **Mapa de calor**: trazado de 180 rayos y distribución relativa de impactos sobre la circunferencia externa del absorbedor.
+- El mapa usa `Qsolar_abs_node_W` ya calculado por el modelo para expresar un pico óptico estimado por sector.
 
-## Corrección conservada en la migración
+## Integración
+`app.py` importa `streamlit.components.v1` y renderiza el componente con `components.html(...)`.
 
-La variable `PrWall` pertenece exclusivamente a la convección interna. La función de convección externa no la calcula ni la utiliza.
-
-
-## Revisión 2026-08-24: agua y transición de Reynolds
-
-- Se eliminó el salto discontinuo Nu=4.36 -> Gnielinski en Re=2300.
-- La zona 2300-4000 usa mezcla smoothstep configurable.
-- Se agregaron eta_optical_abs_pct, eta_balance_pct, Qstorage_est_W y transition_weight.
-- El dashboard muestra la eficiencia óptica como referencia para interpretar la eficiencia térmica del HTF.
-
-## 2026-08-24 — Presets de referencia
-
-Se añadió `presets.py` para evitar mezclar parámetros de Bhambare con el prototipo de Fiamonzini/Rea Quille. Los presets documentales cargan toda la configuración de una sola vez y guardan la referencia y los parámetros no publicados en `config["preset_meta"]`.
-
-### Actualización: temperatura efectiva del cielo
-
-Se sustituyó el supuesto fijo `Tamb - Tsky = 6 K` en los presets de Rea Quille por el modelo Martin-Berdahl reportado en las Ecs. (12)-(14) de su TCC. Bhambare/Sukhatme conserva el modo legado para no alterar esa validación con una hipótesis procedente de otra fuente.
+No se requieren librerías JavaScript externas, npm ni un proceso de build frontend; por ello el despliegue sigue siendo compatible con Streamlit Cloud desde GitHub.
