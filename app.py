@@ -659,7 +659,7 @@ with tab_nodes:
             hover_event=False,
             select_event=False,
             key=f"node_selector_plot_{label}_{time_index}_{result.n_segments}",
-            override_height=175,
+            override_height=205,
             override_width="100%",
         )
         if clicked:
