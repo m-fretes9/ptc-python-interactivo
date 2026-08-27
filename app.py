@@ -663,7 +663,13 @@ with tab_nodes:
             override_width="100%",
         )
         if clicked:
-            candidate = int(clicked[0].get("pointNumber", 0)) + 1
+            event = clicked[0]
+            # En el selector V5 cada barra tiene x = número de nodo. Usar x es
+            # más robusto que depender de pointNumber entre versiones de Plotly.
+            raw_node = event.get("x", None)
+            if raw_node is None:
+                raw_node = int(event.get("pointNumber", 0)) + 1
+            candidate = int(round(float(raw_node)))
             candidate = int(np.clip(candidate, 1, result.n_segments))
             if candidate != st.session_state[state_key]:
                 st.session_state[state_key] = candidate

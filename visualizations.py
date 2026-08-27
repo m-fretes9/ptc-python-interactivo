@@ -921,105 +921,94 @@ def comparative_overview(results: Mapping[str, SimulationResult]) -> go.Figure:
 
 
 def node_flow_selector_figure(result: SimulationResult, time_index: int, selected_node: int) -> go.Figure:
-    """Selector axial por volúmenes contiguos.
+    """Selector axial clickeable basado en barras de Plotly.
 
-    Los rectángulos se dibujan como *shapes* de Plotly para evitar problemas de
-    renderizado de marcadores cuadrados dentro de ``streamlit-plotly-events``.
-    Una traza transparente superpuesta conserva el clic sobre cada volumen.
+    Cada barra ES el volumen axial y por tanto también el objeto de clic. Esto
+    evita depender de shapes + marcadores transparentes, combinación que puede
+    verse correctamente pero no entregar eventos de clic de forma fiable en
+    ``streamlit-plotly-events``.
     """
     k = int(np.clip(time_index, 0, len(result.t_s) - 1))
     n = result.n_segments
     selected = int(np.clip(selected_node, 0, n - 1))
     length = float(result.config["geometry"]["L"])
     dx = length / max(n, 1)
+    node_numbers = np.arange(1, n + 1, dtype=int)
     x_center = (np.arange(n) + 0.5) * dx
     q_to_htf = np.asarray(result.node_diag["Qfluid_W"][k, :], dtype=float)
     dH = -np.asarray(result.node_diag["Qadvection_W"][k, :], dtype=float)
     tf = np.asarray(result.Tf_C[k, :], dtype=float)
 
-    fig = go.Figure()
-    y0, y1 = -0.46, 0.46
-    gap = 0.025 * dx
+    # Un único trace de barras: pointNumber coincide siempre con el índice axial.
+    fills = ["#eef1f4"] * n
+    borders = ["#b8c0ca"] * n
+    widths = [1.2] * n
+    fills[selected] = "#cbd2d9"
+    borders[selected] = "#111827"
+    widths[selected] = 2.6
 
-    # Volúmenes grandes y contiguos. Dibujados como shapes para que siempre
-    # sean visibles en el componente streamlit-plotly-events.
-    for i in range(n):
-        left = i * dx + gap
-        right = (i + 1) * dx - gap
-        is_selected = i == selected
-        fig.add_shape(
-            type="rect",
-            x0=left,
-            x1=right,
-            y0=y0,
-            y1=y1,
-            line={
-                "color": "#111827" if is_selected else "#b8c0ca",
-                "width": 2.6 if is_selected else 1.2,
-            },
-            fillcolor="#cbd2d9" if is_selected else "#eef1f4",
-            layer="below",
-        )
+    directions = np.where(dH >= 0.0, "→", "←")
+    text_labels = [
+        f"<b>{i}</b><br><span style='font-size:18px'>{direction}</span><br>{abs(flow):.1f} W"
+        for i, direction, flow in zip(node_numbers, directions, dH, strict=True)
+    ]
 
-        direction = "→" if dH[i] >= 0.0 else "←"
-        fig.add_annotation(
-            x=x_center[i],
-            y=0.20,
-            text=f"<b>{i + 1}</b>",
-            showarrow=False,
-            font={"size": 13, "color": "#111827"},
-        )
-        fig.add_annotation(
-            x=x_center[i],
-            y=-0.02,
-            text=f"<b>{direction}</b>",
-            showarrow=False,
-            font={"size": 18, "color": "#f97316"},
-        )
-        fig.add_annotation(
-            x=x_center[i],
-            y=-0.25,
-            text=f"{abs(dH[i]):.1f} W",
-            showarrow=False,
-            font={"size": 10, "color": "#475569"},
-        )
-
-    # Capa de clic: marcadores transparentes, uno por volumen. La figura no
-    # depende visualmente de ellos, pero pointNumber sigue identificando nodo.
-    fig.add_trace(
-        go.Scatter(
-            x=x_center,
-            y=np.zeros(n),
-            mode="markers",
-            customdata=np.column_stack([np.arange(1, n + 1), q_to_htf, dH, tf, x_center]),
+    fig = go.Figure(
+        go.Bar(
+            x=node_numbers,
+            y=np.ones(n),
+            width=np.full(n, 0.94),
+            text=text_labels,
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont={"size": 12, "color": "#111827"},
             marker={
-                "symbol": "square",
-                "size": 74,
-                "color": "rgba(0,0,0,0.001)",
-                "line": {"width": 0},
+                "color": fills,
+                "line": {"color": borders, "width": widths},
             },
+            customdata=np.column_stack([node_numbers, x_center, q_to_htf, dH, tf]),
             hovertemplate=(
                 "<b>Nodo %{customdata[0]:.0f}</b><br>"
-                "x = %{customdata[4]:.3f} m<br>"
-                "Q absorbedor→HTF = %{customdata[1]:.2f} W<br>"
-                "ΔH axial = %{customdata[2]:.2f} W<br>"
-                "T agua = %{customdata[3]:.2f} °C<extra></extra>"
+                "x = %{customdata[1]:.3f} m<br>"
+                "Q absorbedor→HTF = %{customdata[2]:.2f} W<br>"
+                "ΔH axial = %{customdata[3]:.2f} W<br>"
+                "T agua = %{customdata[4]:.2f} °C<extra></extra>"
             ),
             showlegend=False,
         )
     )
 
-    fig.update_xaxes(visible=False, range=[0.0, length], fixedrange=True)
-    fig.update_yaxes(visible=False, range=[-0.56, 0.56], fixedrange=True)
+    fig.add_annotation(
+        x=node_numbers[selected],
+        y=1.08,
+        text=f"Nodo activo: {selected + 1}",
+        showarrow=False,
+        font={"size": 11, "color": "#111827"},
+        bgcolor="white",
+        bordercolor="rgba(17,24,39,0.20)",
+        borderpad=3,
+    )
+
+    fig.update_xaxes(
+        visible=False,
+        range=[0.45, n + 0.55],
+        fixedrange=True,
+    )
+    fig.update_yaxes(
+        visible=False,
+        range=[0.0, 1.22],
+        fixedrange=True,
+    )
     fig.update_layout(
-        height=205,
-        margin={"l": 4, "r": 4, "t": 8, "b": 4},
+        height=220,
+        margin={"l": 6, "r": 6, "t": 28, "b": 6},
         template="plotly_white",
         paper_bgcolor="white",
         plot_bgcolor="white",
         hovermode="closest",
         dragmode=False,
         showlegend=False,
+        bargap=0.02,
         modebar={"remove": ["zoom", "pan", "select", "lasso", "autoscale", "resetScale"]},
     )
     return fig
