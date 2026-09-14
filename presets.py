@@ -50,6 +50,22 @@ REA_PROTOTYPE_HOURS = {
     "eta_trnsys_pct": [27.400, 27.300, 26.500, 26.200, 35.300, 32.900, 32.100, 30.000],
 }
 
+# Exportación entregada por el usuario el 14/09/2026 (V10).
+# Se conserva como curva benchmark de salida, NO como conjunto de parámetros de entrada:
+# el CSV no contiene los parámetros identificados que produjeron esas predicciones.
+REA_PROTOTYPE_USER_EXPORT_2026_09_14 = {
+    "hours": list(range(9, 17)),
+    "eta_reference_pct": [28.70, 34.40, 26.51, 30.06, 27.50, 30.01, 28.60, 27.10],
+    "eta_model_initial_pct": [
+        54.458875343535006, 54.45119066969734, 54.44631167069509, 54.44457088402858,
+        54.44608696022283, 54.45075657060333, 54.45826144306864, 54.46809007699063,
+    ],
+    "eta_model_identified_pct": [
+        28.882567305668545, 28.876696305769354, 28.87297278911823, 28.871650510011225,
+        28.87281958360406, 28.876400340231577, 28.88214874860653, 28.889673058221174,
+    ],
+}
+
 
 def _midmonth_doy(month: int, year: int = 2021) -> int:
     """Día representativo solo para metadatos; no es dato de Rea Quille."""
@@ -269,7 +285,26 @@ def build_rea_annual_preset(city: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return cfg, default_fluid_database()
 
 
-def build_rea_prototype_preset() -> tuple[dict[str, Any], dict[str, Any]]:
+def build_rea_prototype_preset(
+    validation_mode: str = "trnsys_published",
+    dni_source: str = "nominal",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Preset del prototipo Fiamonzini/Rea Quille con dos interpretaciones.
+
+    ``trnsys_published`` reproduce la idealización declarada por Rea Quille:
+    DNI nominal 905 W/m², IAM=1 y sin tracking. ``physical_fixed_ns`` mantiene
+    el colector fijo y usa la geometría solar para calcular el ángulo de
+    incidencia/IAM. En este segundo modo el DNI puede mantenerse nominal o
+    calcularse con el modelo claro A·exp(-B/cos(z)); no existe una serie DNI
+    medida en la Tabela 8.
+    """
+    mode = str(validation_mode).strip().lower()
+    if mode not in {"trnsys_published", "physical_fixed_ns"}:
+        raise ValueError(f"Modo de validación del prototipo desconocido: {validation_mode}")
+    dni_key = str(dni_source).strip().lower()
+    if dni_key not in {"nominal", "clear_sky"}:
+        raise ValueError(f"Fuente DNI del prototipo desconocida: {dni_source}")
+
     cfg = default_config()
     _apply_rea_geometry(cfg)
     cfg["operation"].update(
@@ -285,19 +320,65 @@ def build_rea_prototype_preset() -> tuple[dict[str, Any], dict[str, Any]]:
         }
     )
     cfg["environment"].update({"Tamb_K": 25.0 + 273.15, "wind_m_s": 1.0})
-    cfg["solar"].update(
-        {
-            "mode": "constante",
-            "DNI_constant_W_m2": 905.0,
-            "angle_constant_deg": 0.0,
-            "latitude_deg": -25.43816,
-            "longitude_deg": -54.59679,
-            "day_of_year": 296,
-        }
-    )
-    cfg["optics"]["tracking"] = "Fijo / eje N-S; IAM=1 en la idealización TRNSYS reportada"
+
+    if mode == "trnsys_published":
+        cfg["solar"].update(
+            {
+                "mode": "constante",
+                "DNI_constant_W_m2": 905.0,
+                "angle_constant_deg": 0.0,
+                "latitude_deg": -25.43816,
+                "longitude_deg": -54.59679,
+                "day_of_year": 296,
+                "fixed_dni_source": "nominal",
+            }
+        )
+        cfg["optics"]["tracking"] = "Mode 1 / fixed surface; IAM=1 en la idealización TRNSYS reportada"
+        mode_label = "TRNSYS publicado · DNI=905 · IAM=1"
+    else:
+        cfg["solar"].update(
+            {
+                "mode": "fijo_horizontal",
+                "DNI_constant_W_m2": 905.0,
+                "fixed_dni_source": dni_key,
+                "latitude_deg": -25.43816,
+                "longitude_deg": -54.59679,
+                "day_of_year": 296,
+                # A/B permanecen editables. Si se elige clear_sky son un modelo,
+                # no datos medidos del ensayo.
+                "A": float(cfg["solar"].get("A", 713.35)),
+                "B": float(cfg["solar"].get("B", 0.131)),
+            }
+        )
+        cfg["optics"]["tracking"] = "Fijo / eje N-S; incidencia e IAM calculados con geometría solar"
+        mode_label = (
+            "Físico corregido · fijo N-S · IAM variable · DNI nominal"
+            if dni_key == "nominal"
+            else "Físico corregido · fijo N-S · IAM y DNI claro variables"
+        )
+
+    assumptions = _rea_assumptions(monthly=False) + [
+        "Tin no aparece en la Tabela 8. El preset usa Tin=Tamb=25 °C únicamente como hipótesis inicial editable; por este motivo la salida Python no constituye una validación estricta de las ocho eficiencias experimentales.",
+    ]
+    if mode == "trnsys_published":
+        assumptions.append(
+            "Reproducción del procedimiento declarado por Rea Quille: DNI nominal 905 W/m², superficie fija y IAM=1. Se representa con DNI constante y θ=0° para conservar exactamente esa idealización óptica."
+        )
+    else:
+        assumptions.append(
+            "Modo físico exploratorio: el colector permanece fijo con apertura horizontal y eje N-S; θ se calcula como el ángulo cenital e IAM/EndLoss varían con la hora. El trabajo no publica una serie DNI medida."
+        )
+        if dni_key == "nominal":
+            assumptions.append(
+                "DNI se mantiene en 905 W/m² mientras el Sol está sobre el horizonte. Así se aísla el efecto geométrico/IAM sin inventar una meteorología horaria."
+            )
+        else:
+            assumptions.append(
+                "DNI variable se estima con A·exp(-B/cos z). A y B son parámetros editables del modelo de cielo claro y NO mediciones del ensayo de Fiamonzini/Rea Quille."
+            )
+
     cfg["preset_meta"] = {
-        "id": "rea_prototype_2021_10_23",
+        "id": f"rea_prototype_2021_10_23_{mode}_{dni_key}",
         "family": "Rea Quille / Fiamonzini prototipo",
         "source": "Rea Quille (2025), Tabela 8; prototipo de Fiamonzini (2022)",
         "reference_table": "Tabela 8",
@@ -306,6 +387,9 @@ def build_rea_prototype_preset() -> tuple[dict[str, Any], dict[str, Any]]:
         "latitude_deg": -25.43816,
         "longitude_deg": -54.59679,
         "strict_reference": False,
+        "prototype_validation_mode": mode,
+        "prototype_validation_mode_label": mode_label,
+        "prototype_dni_source": dni_key,
         "reference": {
             "Tamb_C": 25.0,
             "DNI_W_m2": 905.0,
@@ -315,11 +399,7 @@ def build_rea_prototype_preset() -> tuple[dict[str, Any], dict[str, Any]]:
             "eta_exp_max_pct": max(REA_PROTOTYPE_HOURS["eta_exp_pct"]),
             "eta_collector_max_reported_pct": 36.50,
         },
-        "assumptions": _rea_assumptions(monthly=False)
-        + [
-            "Tin no aparece en la Tabela 8. El preset usa Tin=Tamb=25 °C únicamente como hipótesis inicial editable; por este motivo la salida Python no constituye una validación estricta de las ocho eficiencias experimentales.",
-            "El TCC indica DNI nominal 905 W/m² e IAM=1 para la reproducción TRNSYS; el preset usa DNI constante y ángulo 0° para representar esa idealización.",
-        ],
+        "assumptions": assumptions,
     }
     return cfg, default_fluid_database()
 
@@ -447,11 +527,18 @@ PRESET_FAMILY_LABELS = {
 }
 
 
-def build_preset(family: str, month: int | None = None, annual: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+def build_preset(
+    family: str,
+    month: int | None = None,
+    annual: bool = False,
+    *,
+    variant: str | None = None,
+    dni_source: str = "nominal",
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if family == "base":
         return build_base_preset()
     if family == "rea_prototype":
-        return build_rea_prototype_preset()
+        return build_rea_prototype_preset(variant or "trnsys_published", dni_source=dni_source)
     if family == "rea_foz_monthly":
         return build_rea_annual_preset("foz") if annual else build_rea_monthly_preset("foz", int(month or 1))
     if family == "rea_alvorada_monthly":

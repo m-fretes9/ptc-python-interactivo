@@ -22,6 +22,7 @@ from presets import (
     REA_ALVORADA_MONTHLY,
     REA_FOZ_MONTHLY,
     REA_PROTOTYPE_HOURS,
+    REA_PROTOTYPE_USER_EXPORT_2026_09_14,
     build_bhambare_sukhatme_preset,
     build_rea_monthly_preset,
     build_rea_prototype_preset,
@@ -394,6 +395,133 @@ def prototype_tcc_table() -> dict[str, Any]:
         ),
     }
 
+
+
+def prototype_user_export_template() -> dict[str, Any]:
+    """Curva benchmark exacta del CSV entregado por el usuario el 14/09/2026."""
+    hours = np.asarray(REA_PROTOTYPE_USER_EXPORT_2026_09_14["hours"], dtype=int)
+    eta_ref = np.asarray(REA_PROTOTYPE_USER_EXPORT_2026_09_14["eta_reference_pct"], dtype=float)
+    eta_initial = np.asarray(REA_PROTOTYPE_USER_EXPORT_2026_09_14["eta_model_initial_pct"], dtype=float)
+    eta_identified = np.asarray(REA_PROTOTYPE_USER_EXPORT_2026_09_14["eta_model_identified_pct"], dtype=float)
+    table = pd.DataFrame(
+        {
+            "Hora": [f"{int(h):02d}:00" for h in hours],
+            "Eta_referencia_pct": eta_ref,
+            "Eta_modelo_inicial_CSV_pct": eta_initial,
+            "Eta_modelo_identificado_CSV_pct": eta_identified,
+        }
+    )
+    return {
+        "table": table,
+        "note": (
+            "Template de salida incorporado desde 2026-09-14T12-26_export.csv. "
+            "El CSV contiene las curvas de referencia/modelo, pero no contiene los valores de los parámetros "
+            "identificados; por eso se usa como benchmark reproducible y no como preset de parámetros inventados."
+        ),
+    }
+
+
+def _prototype_target(target_key: str) -> tuple[str, np.ndarray]:
+    key = str(target_key).strip().lower()
+    if key == "experimental":
+        return "Tabela 8 · experimental", np.asarray(REA_PROTOTYPE_HOURS["eta_exp_pct"], dtype=float)
+    if key == "trnsys":
+        return "Tabela 8 · TRNSYS", np.asarray(REA_PROTOTYPE_HOURS["eta_trnsys_pct"], dtype=float)
+    if key == "csv_initial":
+        return "CSV 14/09 · modelo inicial", np.asarray(REA_PROTOTYPE_USER_EXPORT_2026_09_14["eta_model_initial_pct"], dtype=float)
+    if key == "csv_identified":
+        return "CSV 14/09 · modelo identificado", np.asarray(REA_PROTOTYPE_USER_EXPORT_2026_09_14["eta_model_identified_pct"], dtype=float)
+    raise ValueError(f"Template de referencia del prototipo desconocido: {target_key}")
+
+
+def validate_rea_prototype_mode(
+    validation_mode: str,
+    fluid_database: Mapping[str, Mapping[str, Any]],
+    *,
+    target_key: str = "experimental",
+    dni_source: str = "nominal",
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Ejecuta uno de los dos modos del prototipo y lo compara con una curva objetivo.
+
+    - ``trnsys_published``: DNI=905 W/m², θ=0 e IAM=1, conforme a la
+      idealización declarada en la conclusión del TCC.
+    - ``physical_fixed_ns``: colector fijo, incidencia/IAM horario explícito.
+      El DNI puede ser nominal o de cielo claro; no se presenta como dato medido.
+    """
+    if config is None:
+        cfg, _ = build_rea_prototype_preset(validation_mode, dni_source=dni_source)
+    else:
+        cfg = deepcopy(config)
+    result = PTCSimulator(cfg, fluid_database).simulate()
+    hours = np.asarray(REA_PROTOTYPE_HOURS["hours"], dtype=float)
+    eta_exp = np.asarray(REA_PROTOTYPE_HOURS["eta_exp_pct"], dtype=float)
+    eta_trnsys = np.asarray(REA_PROTOTYPE_HOURS["eta_trnsys_pct"], dtype=float)
+    target_label, eta_target = _prototype_target(target_key)
+    eta_python = np.asarray(
+        [float(result.scalar_diag["eta_pct"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
+    dni_python = np.asarray(
+        [float(result.scalar_diag["DNI_W_m2"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
+    theta_python = np.asarray(
+        [float(result.scalar_diag["theta_deg"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
+    iam_python = np.asarray(
+        [float(result.scalar_diag["IAM"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
+    delta = eta_python - eta_target
+    mae = float(np.mean(np.abs(delta)))
+    rmse = float(np.sqrt(np.mean(np.square(delta))))
+    mape = float(100.0 * np.mean(np.abs(delta) / np.maximum(np.abs(eta_target), np.finfo(float).eps)))
+    table = pd.DataFrame(
+        {
+            "Hora": [f"{int(h):02d}:00" for h in hours],
+            "Eta_experimental_pct": eta_exp,
+            "Eta_TRNSYS_pct": eta_trnsys,
+            "Eta_objetivo_pct": eta_target,
+            "Eta_Python_pct": eta_python,
+            "Diferencia_objetivo_pp": delta,
+            "DNI_Python_W_m2": dni_python,
+            "theta_Python_deg": theta_python,
+            "IAM_Python": iam_python,
+        }
+    )
+    meta = cfg.get("preset_meta", {})
+    mode_label = str(meta.get("prototype_validation_mode_label", validation_mode))
+    if str(validation_mode).lower() == "trnsys_published":
+        note = (
+            "Reproducción de la idealización declarada por Rea Quille: DNI nominal 905 W/m², IAM=1 y "
+            "sin tracking. Tin horario no está publicado, por lo que Tin=25 °C sigue siendo una hipótesis."
+        )
+    else:
+        note = (
+            "Exploración física sin tracking: se calcula la incidencia horaria para una apertura horizontal/eje N-S, "
+            "por lo que IAM y EndLoss varían. El TCC no publica una serie DNI medida; la fuente DNI elegida aquí "
+            "es una hipótesis/modelo explícito."
+        )
+    return {
+        "kind": "prototype_mode",
+        "mode": str(validation_mode),
+        "mode_label": mode_label,
+        "target_key": str(target_key),
+        "target_label": target_label,
+        "dni_source": str(dni_source),
+        "table": table,
+        "result": result,
+        "metrics": {
+            "Eta_target_mean_pct": float(np.mean(eta_target)),
+            "Eta_python_mean_pct": float(np.mean(eta_python)),
+            "MAE_pp": mae,
+            "RMSE_pp": rmse,
+            "MAPE_pct": mape,
+        },
+        "note": note,
+    }
 
 def validate_active_preset(
     config: Mapping[str, Any],

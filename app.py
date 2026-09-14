@@ -26,6 +26,8 @@ from validations import (
     calibrate_inverse_model,
     inverse_parameter_options,
     prototype_tcc_table,
+    prototype_user_export_template,
+    validate_rea_prototype_mode,
     validate_active_preset,
     validate_bhambare,
     validate_rea_quille_city_monthly,
@@ -75,6 +77,10 @@ def initialize_state() -> None:
         st.session_state.preset_month_selector = 1
     if "preset_use_annual" not in st.session_state:
         st.session_state.preset_use_annual = False
+    if "preset_prototype_mode_selector" not in st.session_state:
+        st.session_state.preset_prototype_mode_selector = "trnsys_published"
+    if "preset_prototype_dni_source" not in st.session_state:
+        st.session_state.preset_prototype_dni_source = "nominal"
     if "ray_seed" not in st.session_state:
         st.session_state.ray_seed = 0
 
@@ -117,8 +123,17 @@ def reset_project() -> None:
     st.session_state.ui_revision += 1
 
 
-def apply_reference_preset(family: str, month: int | None = None, annual: bool = False) -> None:
-    new_cfg, new_fluid_db = build_preset(family, month=month, annual=annual)
+def apply_reference_preset(
+    family: str,
+    month: int | None = None,
+    annual: bool = False,
+    *,
+    variant: str | None = None,
+    dni_source: str = "nominal",
+) -> None:
+    new_cfg, new_fluid_db = build_preset(
+        family, month=month, annual=annual, variant=variant, dni_source=dni_source
+    )
     st.session_state.config = new_cfg
     st.session_state.fluid_database = new_fluid_db
     st.session_state.results = {}
@@ -403,8 +418,41 @@ with st.sidebar:
                 format_func=lambda value: MONTH_NAMES_ES[value - 1],
                 key="preset_month_selector",
             )
+
+    prototype_variant = None
+    prototype_dni_source = "nominal"
+    if preset_family == "rea_prototype":
+        prototype_mode_labels = {
+            "trnsys_published": "TRNSYS publicado · DNI 905 / IAM=1",
+            "physical_fixed_ns": "Físico corregido · fijo N-S / IAM variable",
+        }
+        prototype_variant = st.radio(
+            "Modo del prototipo",
+            list(prototype_mode_labels.keys()),
+            format_func=lambda key: prototype_mode_labels[key],
+            key="preset_prototype_mode_selector",
+        )
+        if prototype_variant == "physical_fixed_ns":
+            dni_labels = {
+                "nominal": "DNI nominal 905 W/m² (aislar efecto geométrico)",
+                "clear_sky": "DNI variable por cielo claro A·exp(-B/cos z)",
+            }
+            prototype_dni_source = st.selectbox(
+                "Fuente DNI del modo físico",
+                list(dni_labels.keys()),
+                format_func=lambda key: dni_labels[key],
+                key="preset_prototype_dni_source",
+            )
+            st.caption("El TCC no publica una serie DNI horaria medida; la opción de cielo claro es un modelo exploratorio, no un dato experimental.")
+
     if st.button("Aplicar preset completo", type="primary", use_container_width=True):
-        apply_reference_preset(preset_family, month=preset_month, annual=preset_annual)
+        apply_reference_preset(
+            preset_family,
+            month=preset_month,
+            annual=preset_annual,
+            variant=prototype_variant,
+            dni_source=prototype_dni_source,
+        )
         st.rerun()
 
     active_meta = cfg.get("preset_meta", {})
@@ -533,8 +581,9 @@ with st.sidebar:
         solar = cfg["solar"]
         optics = cfg["optics"]
         mode_labels = {
-            "Parishwad": "Parishwad / cielo claro",
+            "Parishwad": "Parishwad / cielo claro · tracking N-S",
             "constante": "DNI y ángulo constantes",
+            "fijo_horizontal": "Fijo horizontal / geometría solar explícita",
             "perfil": "Perfil horario editable",
         }
         solar_modes = list(mode_labels.keys())
@@ -554,6 +603,23 @@ with st.sidebar:
         elif selected_mode == "constante":
             solar["DNI_constant_W_m2"] = st.number_input("DNI constante (W/m²)", min_value=0.0, value=float(solar["DNI_constant_W_m2"]), step=10.0)
             solar["angle_constant_deg"] = st.number_input("Ángulo de incidencia (°)", min_value=0.0, max_value=90.0, value=float(solar["angle_constant_deg"]), step=1.0)
+        elif selected_mode == "fijo_horizontal":
+            solar["day_of_year"] = st.number_input("Día del año", min_value=1, max_value=366, value=int(solar["day_of_year"]), step=1, key="fixed_doy")
+            solar["latitude_deg"] = st.number_input("Latitud (°)", min_value=-90.0, max_value=90.0, value=float(solar["latitude_deg"]), step=0.1, key="fixed_lat")
+            source_labels = {"nominal": "DNI nominal constante", "clear_sky": "Cielo claro A·exp(-B/cos z)"}
+            source_keys = list(source_labels.keys())
+            current_source = str(solar.get("fixed_dni_source", "nominal"))
+            if current_source not in source_keys:
+                current_source = "nominal"
+            solar["fixed_dni_source"] = st.selectbox(
+                "Fuente DNI", source_keys, index=source_keys.index(current_source), format_func=lambda key: source_labels[key], key="fixed_dni_source_ui"
+            )
+            if solar["fixed_dni_source"] == "nominal":
+                solar["DNI_constant_W_m2"] = st.number_input("DNI nominal (W/m²)", min_value=0.0, value=float(solar["DNI_constant_W_m2"]), step=10.0, key="fixed_dni_nominal")
+            else:
+                solar["A"] = st.number_input("Constante A (W/m²)", min_value=0.0, value=float(solar["A"]), step=1.0, key="fixed_A")
+                solar["B"] = st.number_input("Constante B", min_value=0.0, value=float(solar["B"]), step=0.001, format="%.4f", key="fixed_B")
+            st.caption("Sin tracking: θ se calcula con la posición solar respecto a una apertura horizontal; IAM y EndLoss cambian con la hora.")
         else:
             st.info("Edite el perfil completo en la pestaña Propiedades e irradiación.")
         optics["reflectivity"] = st.number_input("Reflectividad", min_value=0.0, max_value=1.0, value=float(optics["reflectivity"]), step=0.01)
@@ -1146,6 +1212,111 @@ with tab_validation:
         prototype_cols[3].metric("MAPE TRNSYS-exp", f"{validation['MAPE_pct']:.2f} %")
         st.caption(validation["note"])
         st.dataframe(validation["table"], use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Rea Quille / Fiamonzini — validación por modo")
+    st.write(
+        "Separa la reproducción del TRNSYS publicado de una exploración física sin tracking. "
+        "Además puede usar como objetivo las curvas exactas del CSV exportado el 14/09/2026."
+    )
+    proto_mode_labels = {
+        "trnsys_published": "TRNSYS publicado · DNI=905 / IAM=1",
+        "physical_fixed_ns": "Físico corregido · fijo N-S / IAM variable",
+    }
+    proto_target_labels = {
+        "experimental": "Tabela 8 · experimental",
+        "trnsys": "Tabela 8 · TRNSYS",
+        "csv_initial": "Template CSV · modelo inicial",
+        "csv_identified": "Template CSV · modelo identificado",
+    }
+    pc = st.columns([1.25, 1.25, 1.1])
+    proto_mode = pc[0].selectbox(
+        "Modo de simulación",
+        list(proto_mode_labels.keys()),
+        format_func=lambda key: proto_mode_labels[key],
+        key="prototype_validation_mode_ui",
+    )
+    proto_target = pc[1].selectbox(
+        "Curva objetivo",
+        list(proto_target_labels.keys()),
+        format_func=lambda key: proto_target_labels[key],
+        key="prototype_target_template_ui",
+    )
+    proto_dni_source = "nominal"
+    if proto_mode == "physical_fixed_ns":
+        proto_dni_source = pc[2].selectbox(
+            "DNI del modo físico",
+            ["nominal", "clear_sky"],
+            format_func=lambda key: "905 nominal" if key == "nominal" else "Cielo claro variable",
+            key="prototype_validation_dni_ui",
+        )
+    else:
+        pc[2].metric("DNI / IAM", "905 / 1")
+
+    action_cols = st.columns(2)
+    if action_cols[0].button(
+        "Ejecutar validación del modo",
+        type="primary",
+        use_container_width=True,
+        key="run_prototype_mode_validation",
+    ):
+        try:
+            with st.spinner("Ejecutando el prototipo y comparando hora a hora..."):
+                st.session_state.validations["prototype_mode_validation"] = validate_rea_prototype_mode(
+                    proto_mode,
+                    fluid_db,
+                    target_key=proto_target,
+                    dni_source=proto_dni_source,
+                )
+        except Exception as exc:
+            st.exception(exc)
+
+    if action_cols[1].button(
+        "Aplicar este modo al simulador",
+        use_container_width=True,
+        key="apply_prototype_mode_to_simulator",
+    ):
+        apply_reference_preset(
+            "rea_prototype", variant=proto_mode, dni_source=proto_dni_source
+        )
+        st.session_state.preset_family_selector = "rea_prototype"
+        st.session_state.preset_prototype_mode_selector = proto_mode
+        st.session_state.preset_prototype_dni_source = proto_dni_source
+        st.rerun()
+
+    template = prototype_user_export_template()
+    with st.expander("Template CSV incorporado · exportación 14/09/2026", expanded=False):
+        st.caption(template["note"])
+        st.dataframe(template["table"], use_container_width=True, hide_index=True)
+        st.download_button(
+            "Descargar template CSV incorporado",
+            data=template["table"].to_csv(index=False).encode("utf-8-sig"),
+            file_name="rea_fiamonzini_template_2026-09-14.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="download_builtin_rea_csv_template",
+        )
+
+    if "prototype_mode_validation" in st.session_state.validations:
+        pv = st.session_state.validations["prototype_mode_validation"]
+        pm = pv["metrics"]
+        st.markdown(f"#### {pv['mode_label']} → {pv['target_label']}")
+        mc = st.columns(5)
+        mc[0].metric("η objetivo media", f"{pm['Eta_target_mean_pct']:.2f} %")
+        mc[1].metric("η Python media", f"{pm['Eta_python_mean_pct']:.2f} %")
+        mc[2].metric("MAE", f"{pm['MAE_pp']:.2f} pp")
+        mc[3].metric("RMSE", f"{pm['RMSE_pp']:.2f} pp")
+        mc[4].metric("MAPE", f"{pm['MAPE_pct']:.2f} %")
+        st.caption(pv["note"])
+        st.dataframe(pv["table"], use_container_width=True, hide_index=True)
+        st.download_button(
+            "Descargar comparación del modo · CSV",
+            data=pv["table"].to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"rea_fiamonzini_{pv['mode']}_{pv['target_key']}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="download_prototype_mode_validation",
+        )
 
 
 with tab_sensitivity:

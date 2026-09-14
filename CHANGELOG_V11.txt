@@ -1,0 +1,12 @@
+V11 — Rea Quille/Fiamonzini: doble validación + template CSV
+
+- Se separa la validación del prototipo en dos modos:
+  1) TRNSYS publicado: DNI=905 W/m², θ=0, IAM=1, sin tracking.
+  2) Físico corregido: colector fijo con apertura horizontal/eje N-S, incidencia solar, IAM y EndLoss variables.
+- El modo físico permite mantener DNI nominal=905 para aislar la geometría o usar el modelo de cielo claro A·exp(-B/cos z). El TCC no publica DNI horario medido.
+- Se incorpora 2026-09-14T12-26_export.csv como benchmark/template exacto de salida.
+- La validación puede comparar contra: Tabela 8 experimental, Tabela 8 TRNSYS, CSV modelo inicial o CSV modelo identificado.
+- Se añade botón para aplicar cualquiera de los dos modos al simulador principal y ejecutarlo desde la pestaña Simulación.
+- El template CSV se puede visualizar y descargar desde la app.
+- No se inventan parámetros identificados: el CSV suministrado no contiene esos valores, solo las curvas de salida.
+- Nueva rama solar `fijo_horizontal` para modelar un colector sin tracking mediante ángulo cenital.

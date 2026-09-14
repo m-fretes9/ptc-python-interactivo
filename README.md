@@ -244,3 +244,9 @@ El optimizador reporta:
 - exportación XLSX de parámetros y comparación.
 
 Durante la búsqueda se usa una malla reducida `N=6` y `max_step=600 s` para acelerar la evaluación, apoyándose en el estudio previo de independencia de malla. La revalidación final vuelve a la malla completa del preset (normalmente `N=12`).
+
+## V11 — validación del prototipo Rea Quille/Fiamonzini
+
+La aplicación diferencia ahora entre la reproducción de la idealización TRNSYS publicada (`DNI=905 W/m²`, `IAM=1`) y una exploración física con colector fijo, incidencia horaria e IAM/EndLoss variables. La segunda opción puede mantener el DNI nominal o usar el modelo de cielo claro; como el trabajo de Rea Quille no publica una serie DNI horaria medida para la Tabela 8, esa rama se presenta explícitamente como exploratoria.
+
+También se incorpora `templates/rea_fiamonzini_export_2026-09-14.csv`, copia exacta del CSV entregado por el usuario. Puede seleccionarse su curva `Modelo_inicial` o `Modelo_identificado` como benchmark en la pestaña Validación. El archivo no contiene los parámetros del ajuste inverso, por lo que V11 no inventa un preset de parámetros identificados.

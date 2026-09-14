@@ -547,6 +547,34 @@ class PTCSimulator:
             theta_deg = max(float(solar["angle_constant_deg"]), 0.0)
             cos_theta = max(float(np.cos(np.deg2rad(theta_deg))), 0.0)
             cos_z = cos_theta
+        elif mode == "fijo_horizontal":
+            # Colector sin tracking, con la apertura horizontal y eje de la calha N-S.
+            # El ángulo de incidencia respecto a la normal de la apertura coincide
+            # con el ángulo cenital. Esta rama se añadió para distinguir la
+            # idealización TRNSYS (IAM=1, θ=0) de una geometría solar explícita.
+            phi = float(solar["latitude_deg"])
+            day = float(solar["day_of_year"])
+            delta = 23.45 * np.sin(np.deg2rad(360.0 * (284.0 + day) / 365.0))
+            omega = 15.0 * (12.0 - LAT_h)
+            cos_z = (
+                np.sin(np.deg2rad(phi)) * np.sin(np.deg2rad(delta))
+                + np.cos(np.deg2rad(phi))
+                * np.cos(np.deg2rad(delta))
+                * np.cos(np.deg2rad(omega))
+            )
+            cos_z = float(np.clip(cos_z, -1.0, 1.0))
+            if cos_z > 0.0:
+                cos_theta = cos_z
+                theta_deg = float(np.rad2deg(np.arccos(cos_theta)))
+                dni_source = str(solar.get("fixed_dni_source", "nominal")).lower()
+                if dni_source == "clear_sky":
+                    DNI = float(solar["A"]) * np.exp(-float(solar["B"]) / max(cos_z, 1e-8))
+                else:
+                    DNI = max(float(solar["DNI_constant_W_m2"]), 0.0)
+            else:
+                DNI = 0.0
+                cos_theta = 0.0
+                theta_deg = 90.0
         elif mode == "perfil":
             profile = solar["profile"]
             times = np.asarray(profile["LAT_h"], dtype=float)
