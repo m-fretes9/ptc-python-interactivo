@@ -171,9 +171,12 @@ class PTCSimulator:
         y = solution.y.T
         scalar_names = [
             "DNI_W_m2",
+            "solar_time_h",
             "theta_deg",
             "cosTheta",
             "cosZ",
+            "G_aperture_W_m2",
+            "Qbeam_normal_W",
             "IAM",
             "endLoss",
             "Qincident_W",
@@ -182,6 +185,7 @@ class PTCSimulator:
             "Quseful_W",
             "Qloss_W",
             "eta_pct",
+            "eta_dni_basis_pct",
             "eta_optical_abs_pct",
             "eta_balance_pct",
             "Qstorage_est_W",
@@ -500,7 +504,14 @@ class PTCSimulator:
             else np.nan
         )
         Qincident = float(solar["Qincident_W"])
+        Qbeam_normal = float(solar.get("Qbeam_normal_W", Qincident))
+        # eta_pct mantiene la definición histórica relativa a la potencia
+        # proyectada sobre la apertura. eta_dni_basis_pct reproduce la base de
+        # la Ec. (10) de Rea Quille: mCpΔT / (Aa·Ib), con Ib=DNI. Para un
+        # colector fijo esta segunda eficiencia incluye explícitamente la pérdida
+        # por cos(theta) y es la adecuada para comparar con la Tabela 8.
         eta = 100.0 * Quseful / Qincident if Qincident > 1e-9 else np.nan
+        eta_dni_basis = 100.0 * Quseful / Qbeam_normal if Qbeam_normal > 1e-9 else np.nan
         Qsolar_total = float(solar["QsolarAbs_W"]) + float(solar["QsolarGlass_W"])
         eta_optical_abs = (
             100.0 * float(solar["QsolarAbs_W"]) / Qincident
@@ -521,6 +532,7 @@ class PTCSimulator:
             "Quseful_W": Quseful,
             "Qloss_W": Qloss,
             "eta_pct": eta,
+            "eta_dni_basis_pct": eta_dni_basis,
             "eta_optical_abs_pct": eta_optical_abs,
             "eta_balance_pct": eta_balance,
             "Qstorage_est_W": Qstorage_est,
@@ -541,6 +553,7 @@ class PTCSimulator:
         solar = self.cfg["solar"]
         mode = str(solar["mode"]).lower()
         LAT_h = float(time_s) / 3600.0
+        solar_time_h = LAT_h
 
         if mode == "constante":
             DNI = max(float(solar["DNI_constant_W_m2"]), 0.0)
@@ -548,14 +561,29 @@ class PTCSimulator:
             cos_theta = max(float(np.cos(np.deg2rad(theta_deg))), 0.0)
             cos_z = cos_theta
         elif mode == "fijo_horizontal":
-            # Colector sin tracking, con la apertura horizontal y eje de la calha N-S.
-            # El ángulo de incidencia respecto a la normal de la apertura coincide
-            # con el ángulo cenital. Esta rama se añadió para distinguir la
-            # idealización TRNSYS (IAM=1, θ=0) de una geometría solar explícita.
+            # Colector SIN tracking: la apertura permanece fija y horizontal, con
+            # el eje longitudinal de la calha N-S. La geometría solar se calcula
+            # a cada instante; por eso cos(theta), IAM y EndLoss varían aunque el
+            # colector no se mueva.
             phi = float(solar["latitude_deg"])
             day = float(solar["day_of_year"])
             delta = 23.45 * np.sin(np.deg2rad(360.0 * (284.0 + day) / 365.0))
-            omega = 15.0 * (12.0 - LAT_h)
+
+            # Las horas experimentales normalmente son hora civil. Para comparar
+            # con ellas, opcionalmente se convierten a hora solar aparente usando
+            # longitud, meridiano estándar y ecuación del tiempo.
+            if bool(solar.get("clock_time_correction", False)):
+                longitude = float(solar.get("longitude_deg", 0.0))
+                utc_offset = float(solar.get("utc_offset_h", 0.0))
+                B_eot = np.deg2rad(360.0 * (day - 81.0) / 364.0)
+                eot_min = 9.87 * np.sin(2.0 * B_eot) - 7.53 * np.cos(B_eot) - 1.5 * np.sin(B_eot)
+                lstm_deg = 15.0 * utc_offset
+                time_correction_min = 4.0 * (longitude - lstm_deg) + eot_min
+                solar_time_h = LAT_h + time_correction_min / 60.0
+            else:
+                solar_time_h = LAT_h
+
+            omega = 15.0 * (12.0 - solar_time_h)
             cos_z = (
                 np.sin(np.deg2rad(phi)) * np.sin(np.deg2rad(delta))
                 + np.cos(np.deg2rad(phi))
@@ -564,11 +592,27 @@ class PTCSimulator:
             )
             cos_z = float(np.clip(cos_z, -1.0, 1.0))
             if cos_z > 0.0:
+                # Para una apertura horizontal fija, el ángulo entre el haz y la
+                # normal de la apertura coincide con el ángulo cenital.
                 cos_theta = cos_z
                 theta_deg = float(np.rad2deg(np.arccos(cos_theta)))
                 dni_source = str(solar.get("fixed_dni_source", "nominal")).lower()
                 if dni_source == "clear_sky":
                     DNI = float(solar["A"]) * np.exp(-float(solar["B"]) / max(cos_z, 1e-8))
+                elif dni_source == "temporal_clear_sky_905":
+                    # Perfil de cielo claro normalizado: conserva la forma temporal
+                    # de Parishwad, pero fuerza el DNI especificado al mediodía
+                    # solar. Así 905 W/m² actúa como pico nominal, no como una
+                    # irradiancia artificialmente constante todo el día.
+                    cos_z_noon = (
+                        np.sin(np.deg2rad(phi)) * np.sin(np.deg2rad(delta))
+                        + np.cos(np.deg2rad(phi)) * np.cos(np.deg2rad(delta))
+                    )
+                    cos_z_noon = max(float(cos_z_noon), 1e-8)
+                    B_atm = float(solar["B"])
+                    dni_noon = max(float(solar.get("DNI_noon_W_m2", 905.0)), 0.0)
+                    A_normalized = dni_noon / np.exp(-B_atm / cos_z_noon)
+                    DNI = A_normalized * np.exp(-B_atm / max(cos_z, 1e-8))
                 else:
                     DNI = max(float(solar["DNI_constant_W_m2"]), 0.0)
             else:
@@ -628,7 +672,9 @@ class PTCSimulator:
             end_loss = 0.0
 
         aperture_area = float(self.g["W"]) * float(self.g["L"])
-        Qincident = DNI * cos_theta * aperture_area
+        G_aperture = DNI * cos_theta
+        Qbeam_normal = DNI * aperture_area
+        Qincident = G_aperture * aperture_area
         optics = self.cfg["optics"]
         absorber = self.cfg["materials"]["absorber"]
         glass = self.cfg["materials"]["glass"]
@@ -666,9 +712,12 @@ class PTCSimulator:
 
         return {
             "DNI_W_m2": float(DNI),
+            "solar_time_h": float(solar_time_h),
             "theta_deg": float(theta_deg),
             "cosTheta": float(cos_theta),
             "cosZ": float(cos_z),
+            "G_aperture_W_m2": float(G_aperture),
+            "Qbeam_normal_W": float(Qbeam_normal),
             "IAM": float(IAM),
             "endLoss": float(end_loss),
             "Qincident_W": float(Qincident),

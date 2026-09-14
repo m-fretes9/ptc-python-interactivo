@@ -82,7 +82,7 @@ def initialize_state() -> None:
     if "preset_prototype_mode_selector" not in st.session_state:
         st.session_state.preset_prototype_mode_selector = "trnsys_published"
     if "preset_prototype_dni_source" not in st.session_state:
-        st.session_state.preset_prototype_dni_source = "nominal"
+        st.session_state.preset_prototype_dni_source = "temporal_clear_sky_905"
     if "ray_seed" not in st.session_state:
         st.session_state.ray_seed = 0
 
@@ -446,6 +446,7 @@ with st.sidebar:
         )
         if prototype_variant == "physical_fixed_ns":
             dni_labels = {
+                "temporal_clear_sky_905": "DNI temporal recomendado · cielo claro, 905 W/m² al mediodía solar",
                 "nominal": "DNI nominal 905 W/m² (aislar efecto geométrico)",
                 "clear_sky": "DNI variable por cielo claro A·exp(-B/cos z)",
             }
@@ -455,7 +456,7 @@ with st.sidebar:
                 format_func=lambda key: dni_labels[key],
                 key="preset_prototype_dni_source",
             )
-            st.caption("El TCC no publica una serie DNI horaria medida; la opción de cielo claro es un modelo exploratorio, no un dato experimental.")
+            st.caption("El TCC no publica una serie DNI horaria medida. El perfil temporal recomendado reproduce la geometría solar y normaliza el cielo claro a 905 W/m² al mediodía; sigue siendo un modelo, no una medición.")
 
     if st.button("Aplicar preset completo", type="primary", use_container_width=True):
         apply_reference_preset(
@@ -618,7 +619,7 @@ with st.sidebar:
         elif selected_mode == "fijo_horizontal":
             solar["day_of_year"] = st.number_input("Día del año", min_value=1, max_value=366, value=int(solar["day_of_year"]), step=1, key="fixed_doy")
             solar["latitude_deg"] = st.number_input("Latitud (°)", min_value=-90.0, max_value=90.0, value=float(solar["latitude_deg"]), step=0.1, key="fixed_lat")
-            source_labels = {"nominal": "DNI nominal constante", "clear_sky": "Cielo claro A·exp(-B/cos z)"}
+            source_labels = {"temporal_clear_sky_905": "Temporal cielo claro · 905 W/m² al mediodía", "nominal": "DNI nominal constante", "clear_sky": "Cielo claro A·exp(-B/cos z)"}
             source_keys = list(source_labels.keys())
             current_source = str(solar.get("fixed_dni_source", "nominal"))
             if current_source not in source_keys:
@@ -628,10 +629,15 @@ with st.sidebar:
             )
             if solar["fixed_dni_source"] == "nominal":
                 solar["DNI_constant_W_m2"] = st.number_input("DNI nominal (W/m²)", min_value=0.0, value=float(solar["DNI_constant_W_m2"]), step=10.0, key="fixed_dni_nominal")
+            elif solar["fixed_dni_source"] == "temporal_clear_sky_905":
+                solar["DNI_noon_W_m2"] = st.number_input("DNI al mediodía solar (W/m²)", min_value=0.0, value=float(solar.get("DNI_noon_W_m2", 905.0)), step=10.0, key="fixed_dni_noon")
+                solar["B"] = st.number_input("Coeficiente atmosférico B", min_value=0.0, value=float(solar["B"]), step=0.001, format="%.4f", key="fixed_B_norm")
+                solar["utc_offset_h"] = st.number_input("UTC local (h)", min_value=-12.0, max_value=14.0, value=float(solar.get("utc_offset_h", -3.0)), step=1.0, key="fixed_utc")
+                solar["clock_time_correction"] = st.checkbox("Convertir hora civil → hora solar aparente", value=bool(solar.get("clock_time_correction", True)), key="fixed_clock_corr")
             else:
                 solar["A"] = st.number_input("Constante A (W/m²)", min_value=0.0, value=float(solar["A"]), step=1.0, key="fixed_A")
                 solar["B"] = st.number_input("Constante B", min_value=0.0, value=float(solar["B"]), step=0.001, format="%.4f", key="fixed_B")
-            st.caption("Sin tracking: θ se calcula con la posición solar respecto a una apertura horizontal; IAM y EndLoss cambian con la hora.")
+            st.caption("Sin tracking: el colector permanece fijo. θ, irradiancia proyectada sobre la apertura, IAM y EndLoss cambian con la hora.")
         else:
             st.info("Edite el perfil completo en la pestaña Propiedades e irradiación.")
         optics["reflectivity"] = st.number_input("Reflectividad", min_value=0.0, max_value=1.0, value=float(optics["reflectivity"]), step=0.01)
@@ -1258,8 +1264,12 @@ with tab_validation:
     if proto_mode == "physical_fixed_ns":
         proto_dni_source = pc[2].selectbox(
             "DNI del modo físico",
-            ["nominal", "clear_sky"],
-            format_func=lambda key: "905 nominal" if key == "nominal" else "Cielo claro variable",
+            ["temporal_clear_sky_905", "nominal", "clear_sky"],
+            format_func=lambda key: {
+                "temporal_clear_sky_905": "Temporal · 905 al mediodía",
+                "nominal": "905 nominal",
+                "clear_sky": "Cielo claro libre",
+            }[key],
             key="prototype_validation_dni_ui",
         )
     else:

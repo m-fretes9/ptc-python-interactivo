@@ -302,7 +302,7 @@ def build_rea_prototype_preset(
     if mode not in {"trnsys_published", "physical_fixed_ns"}:
         raise ValueError(f"Modo de validación del prototipo desconocido: {validation_mode}")
     dni_key = str(dni_source).strip().lower()
-    if dni_key not in {"nominal", "clear_sky"}:
+    if dni_key not in {"nominal", "clear_sky", "temporal_clear_sky_905"}:
         raise ValueError(f"Fuente DNI del prototipo desconocida: {dni_source}")
 
     cfg = default_config()
@@ -344,6 +344,9 @@ def build_rea_prototype_preset(
                 "latitude_deg": -25.43816,
                 "longitude_deg": -54.59679,
                 "day_of_year": 296,
+                "utc_offset_h": -3.0,
+                "clock_time_correction": True,
+                "DNI_noon_W_m2": 905.0,
                 # A/B permanecen editables. Si se elige clear_sky son un modelo,
                 # no datos medidos del ensayo.
                 "A": float(cfg["solar"].get("A", 713.35)),
@@ -351,11 +354,12 @@ def build_rea_prototype_preset(
             }
         )
         cfg["optics"]["tracking"] = "Fijo / eje N-S; incidencia e IAM calculados con geometría solar"
-        mode_label = (
-            "Físico corregido · fijo N-S · IAM variable · DNI nominal"
-            if dni_key == "nominal"
-            else "Físico corregido · fijo N-S · IAM y DNI claro variables"
-        )
+        if dni_key == "nominal":
+            mode_label = "Físico corregido · fijo N-S · IAM variable · DNI nominal"
+        elif dni_key == "temporal_clear_sky_905":
+            mode_label = "Físico corregido · fijo N-S · DNI temporal (905 al mediodía) · IAM variable"
+        else:
+            mode_label = "Físico corregido · fijo N-S · IAM y DNI claro variables"
 
     assumptions = _rea_assumptions(monthly=False) + [
         "Tin no aparece en la Tabela 8. El preset usa Tin=Tamb=25 °C únicamente como hipótesis inicial editable; por este motivo la salida Python no constituye una validación estricta de las ocho eficiencias experimentales.",
@@ -371,6 +375,13 @@ def build_rea_prototype_preset(
         if dni_key == "nominal":
             assumptions.append(
                 "DNI se mantiene en 905 W/m² mientras el Sol está sobre el horizonte. Así se aísla el efecto geométrico/IAM sin inventar una meteorología horaria."
+            )
+        elif dni_key == "temporal_clear_sky_905":
+            assumptions.append(
+                "DNI varía temporalmente con A·exp(-B/cos z), reescalado para valer 905 W/m² al mediodía solar. Es un perfil físico sintético, no una medición horaria del ensayo."
+            )
+            assumptions.append(
+                "Las horas de la Tabla 8 se interpretan como hora civil UTC−3 y se convierten a hora solar aparente usando longitud y ecuación del tiempo."
             )
         else:
             assumptions.append(

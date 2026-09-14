@@ -1,0 +1,10 @@
+V12 — irradiación temporal + colector fijo sin tracking
+
+- Nuevo DNI temporal para Rea/Fiamonzini: cielo claro A·exp(-B/cos z) reescalado para alcanzar 905 W/m² al mediodía solar.
+- Conversión opcional de hora civil a hora solar aparente usando longitud, UTC local y ecuación del tiempo.
+- El colector permanece fijo: theta, cos(theta), irradiancia proyectada, IAM y EndLoss varían con la hora.
+- Se separan DNI y irradiancia realmente proyectada sobre la apertura: G_apertura = DNI*cos(theta).
+- Nueva eficiencia de comparación Rea Eq.(10): eta_DNI = Qutil/(Aa*DNI). Esta métrica incluye la penalización geométrica de un colector fijo y se usa en la validación Rea/Fiamonzini.
+- Se conserva eta_pct histórica, referida a la potencia ya proyectada sobre la apertura, para compatibilidad y diagnóstico.
+- Export de validación ampliado con DNI, G_apertura, hora solar aparente, theta, IAM, EndLoss y ambas eficiencias.
+- 10/10 tests OK.

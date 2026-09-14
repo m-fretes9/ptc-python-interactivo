@@ -69,3 +69,44 @@ def test_identified_template_reproduces_exported_curve():
     assert out["parameter_template"] == "identified"
     assert out["metrics"]["RMSE_pp"] < 1e-6
     assert out["metrics"]["MAE_pp"] < 1e-6
+
+
+def test_temporal_fixed_mode_varies_dni_and_keeps_collector_fixed():
+    from ptc_model import PTCSimulator
+    from defaults import DEFAULT_FLUID_DATABASE
+
+    cfg, _ = build_rea_prototype_preset("physical_fixed_ns", dni_source="temporal_clear_sky_905")
+    result = PTCSimulator(cfg, DEFAULT_FLUID_DATABASE).simulate()
+
+    def idx(hour):
+        import numpy as np
+        return int(np.argmin(np.abs(result.LAT_h - hour)))
+
+    j9, j12, j16 = idx(9.0), idx(12.0), idx(16.0)
+    dni9 = float(result.scalar_diag["DNI_W_m2"][j9])
+    dni12 = float(result.scalar_diag["DNI_W_m2"][j12])
+    dni16 = float(result.scalar_diag["DNI_W_m2"][j16])
+    assert dni12 > dni9 > 0.0
+    assert dni12 > dni16 > 0.0
+    assert 895.0 < dni12 < 910.0
+
+    # Sin tracking la irradiancia proyectada sobre la apertura debe ser menor
+    # que el DNI cuando theta != 0.
+    assert float(result.scalar_diag["G_aperture_W_m2"][j9]) < dni9
+    assert float(result.scalar_diag["theta_deg"][j9]) > 0.0
+
+    # La eficiencia de la Ec. (10), referida a Aa*DNI, incorpora la pérdida
+    # geométrica por cos(theta) y por eso es menor que la eficiencia referida
+    # a la potencia ya proyectada sobre la apertura.
+    assert float(result.scalar_diag["eta_dni_basis_pct"][j9]) < float(result.scalar_diag["eta_pct"][j9])
+
+
+def test_trnsys_published_eta_bases_coincide_at_theta_zero():
+    from ptc_model import PTCSimulator
+    from defaults import DEFAULT_FLUID_DATABASE
+    import numpy as np
+
+    cfg, _ = build_rea_prototype_preset("trnsys_published")
+    result = PTCSimulator(cfg, DEFAULT_FLUID_DATABASE).simulate()
+    j = int(np.argmin(np.abs(result.LAT_h - 12.0)))
+    assert abs(float(result.scalar_diag["eta_dni_basis_pct"][j]) - float(result.scalar_diag["eta_pct"][j])) < 1e-10

@@ -512,7 +512,16 @@ def validate_rea_prototype_mode(
     eta_exp = np.asarray(REA_PROTOTYPE_HOURS["eta_exp_pct"], dtype=float)
     eta_trnsys = np.asarray(REA_PROTOTYPE_HOURS["eta_trnsys_pct"], dtype=float)
     target_label, eta_target = _prototype_target(target_key)
+    # Para Rea/Fiamonzini se usa la misma base de la Ec. (10):
+    # eta = m Cp (Tout-Tin) / (Aa * Ib), con Ib=DNI. En el modo fijo físico
+    # esto NO divide por cos(theta), por lo que las pérdidas geométricas del
+    # colector sin tracking aparecen realmente como caída de eficiencia.
+    eta_key = "eta_dni_basis_pct"
     eta_python = np.asarray(
+        [float(result.scalar_diag[eta_key][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
+    eta_projected = np.asarray(
         [float(result.scalar_diag["eta_pct"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
         dtype=float,
     )
@@ -528,6 +537,18 @@ def validate_rea_prototype_mode(
         [float(result.scalar_diag["IAM"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
         dtype=float,
     )
+    endloss_python = np.asarray(
+        [float(result.scalar_diag["endLoss"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
+    g_aperture_python = np.asarray(
+        [float(result.scalar_diag["G_aperture_W_m2"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
+    solar_time_python = np.asarray(
+        [float(result.scalar_diag["solar_time_h"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
     delta = eta_python - eta_target
     mae = float(np.mean(np.abs(delta)))
     rmse = float(np.sqrt(np.mean(np.square(delta))))
@@ -538,11 +559,15 @@ def validate_rea_prototype_mode(
             "Eta_experimental_pct": eta_exp,
             "Eta_TRNSYS_pct": eta_trnsys,
             "Eta_objetivo_pct": eta_target,
-            "Eta_Python_pct": eta_python,
+            "Eta_Python_Ec10_pct": eta_python,
+            "Eta_Python_sobre_proyectada_pct": eta_projected,
             "Diferencia_objetivo_pp": delta,
             "DNI_Python_W_m2": dni_python,
+            "G_apertura_Python_W_m2": g_aperture_python,
+            "Hora_solar_aparente_h": solar_time_python,
             "theta_Python_deg": theta_python,
             "IAM_Python": iam_python,
+            "EndLoss_Python": endloss_python,
         }
     )
     meta = cfg.get("preset_meta", {})
@@ -554,9 +579,10 @@ def validate_rea_prototype_mode(
         )
     else:
         note = (
-            "Exploración física sin tracking: se calcula la incidencia horaria para una apertura horizontal/eje N-S, "
-            "por lo que IAM y EndLoss varían. El TCC no publica una serie DNI medida; la fuente DNI elegida aquí "
-            "es una hipótesis/modelo explícito."
+            "Exploración física sin tracking: el colector permanece fijo y se calcula la geometría solar horaria. "
+            "La eficiencia comparada usa la Ec. (10), eta=mCpΔT/(Aa·DNI), por lo que cos(theta), IAM y EndLoss "
+            "reducen realmente la eficiencia fuera del mediodía. El TCC no publica una serie DNI medida; la fuente "
+            "DNI elegida aquí es una hipótesis/modelo explícito."
         )
     if applied_template is not None:
         note += (

@@ -250,3 +250,9 @@ Durante la búsqueda se usa una malla reducida `N=6` y `max_step=600 s` para ace
 La aplicación diferencia ahora entre la reproducción de la idealización TRNSYS publicada (`DNI=905 W/m²`, `IAM=1`) y una exploración física con colector fijo, incidencia horaria e IAM/EndLoss variables. La segunda opción puede mantener el DNI nominal o usar el modelo de cielo claro; como el trabajo de Rea Quille no publica una serie DNI horaria medida para la Tabela 8, esa rama se presenta explícitamente como exploratoria.
 
 También se incorpora `templates/rea_fiamonzini_export_2026-09-14.csv`, copia exacta del CSV entregado por el usuario. Puede seleccionarse su curva `Modelo_inicial` o `Modelo_identificado` como benchmark en la pestaña Validación. El archivo no contiene los parámetros del ajuste inverso, por lo que V11 no inventa un preset de parámetros identificados.
+
+## V12 — irradiación temporal y PTC fijo
+
+Para el prototipo Rea Quille/Fiamonzini se incorpora un modo físico temporal sin tracking. El DNI puede modelarse con un perfil de cielo claro normalizado para alcanzar 905 W/m² al mediodía solar. El colector no sigue al Sol, por lo que la potencia sobre su apertura se calcula como `G_apertura = DNI*cos(theta)` y además se aplican `IAM(theta)` y `EndLoss(theta)`.
+
+Para comparar con la ecuación experimental (10) de Rea Quille se usa `eta_DNI = Qutil/(Aa*DNI)`. La eficiencia histórica `eta_pct = Qutil/Qincidente_proyectada` se conserva como diagnóstico. Esta separación evita cancelar artificialmente la pérdida por coseno al evaluar un colector fijo.
