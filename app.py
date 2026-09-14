@@ -10,7 +10,6 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 from defaults import default_config, default_fluid_database
@@ -393,7 +392,7 @@ def render_axial_node_selector(
             arrow = "→" if q >= 0.0 else "←"
             label = f"{i + 1}\n{arrow}\nΔH {abs(q):.1f} W"
             button_key = f"node_tile_{safe_label}_{k}_{i + 1}"
-            if col.button(label, key=button_key, use_container_width=True):
+            if col.button(label, key=button_key, width="stretch"):
                 st.session_state[state_key] = i + 1
                 st.rerun()
 
@@ -485,7 +484,7 @@ with header_right:
     run_clicked = st.button(
         "▶ Ejecutar simulación",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         key="run_simulation_top",
         help="Ejecuta la configuración actual. El botón permanece arriba para evitar bajar por la página.",
     )
@@ -546,7 +545,7 @@ with st.sidebar:
             )
             st.caption("El TCC no publica una serie DNI horaria medida. El perfil temporal recomendado reproduce la geometría solar y normaliza el cielo claro a 905 W/m² al mediodía; sigue siendo un modelo, no una medición.")
 
-    if st.button("Aplicar preset completo", type="primary", use_container_width=True):
+    if st.button("Aplicar preset completo", type="primary", width="stretch"):
         apply_reference_preset(
             preset_family,
             month=preset_month,
@@ -562,7 +561,7 @@ with st.sidebar:
         with st.expander("Ver parámetros fijados y supuestos", expanded=False):
             st.dataframe(
                 pd.DataFrame(preset_summary_rows(cfg), columns=["Campo", "Valor"]),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
             assumptions = active_meta.get("assumptions", [])
@@ -582,7 +581,7 @@ with st.sidebar:
         except Exception as exc:
             st.error(str(exc))
 
-    if st.button("Restablecer valores de referencia", use_container_width=True):
+    if st.button("Restablecer valores de referencia", width="stretch"):
         reset_project()
         st.rerun()
 
@@ -896,9 +895,9 @@ if main_section == "Simulación":
             diag_cols[3].metric("Régimen salida", regime)
             if solar_varies:
                 if len(st.session_state.results) > 1:
-                    st.plotly_chart(comparative_overview(st.session_state.results), use_container_width=True)
+                    st.plotly_chart(comparative_overview(st.session_state.results), width="stretch", key="sim_results_comparative_overview")
                 else:
-                    st.plotly_chart(dynamic_overview(result), use_container_width=True)
+                    st.plotly_chart(dynamic_overview(result), width="stretch", key=f"sim_results_dynamic_overview_{label}")
             else:
                 st.info(
                     "La entrada solar aplicada al receptor es constante. Se omite la respuesta transitoria: "
@@ -918,8 +917,8 @@ if main_section == "Simulación":
                             "Qloss_W": float(scenario_result.scalar_diag["Qloss_W"][kk]),
                             "Eta_pct": float(scenario_result.scalar_diag["eta_pct"][kk]),
                         })
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                st.plotly_chart(axial_profiles(result, k_ref), use_container_width=True)
+                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                st.plotly_chart(axial_profiles(result, k_ref), width="stretch", key=f"sim_results_axial_profiles_{label}_{k_ref}")
             with st.expander("Resumen del solver y del escenario"):
                 st.code(result_summary(result), language="text")
             scalar_csv = result.scalar_dataframe().to_csv(index=False).encode("utf-8")
@@ -975,23 +974,23 @@ if main_section == "Simulación":
             )
 
             st.subheader("Sección transversal interactiva del PTC")
-            components.html(
+            st.iframe(
                 ptc_optical_component_html(result.config, snapshot, node_index),
                 height=735,
-                scrolling=False,
+                width="stretch",
             )
 
             st.subheader("Circuito térmico")
-            components.html(
+            st.iframe(
                 thermal_circuit_component_html(result.config, snapshot),
                 height=690,
-                scrolling=False,
+                width="stretch",
             )
 
-            st.plotly_chart(axial_profiles(result, time_index), use_container_width=True)
+            st.plotly_chart(axial_profiles(result, time_index), width="stretch", key=f"sim_nodes_axial_profiles_{label}_{time_index}")
             left, right = st.columns([1.1, 0.9])
             with left:
-                st.plotly_chart(node_balance(snapshot, bool(result.config["model"]["has_glass"])), use_container_width=True)
+                st.plotly_chart(node_balance(snapshot, bool(result.config["model"]["has_glass"])), width="stretch", key=f"sim_nodes_balance_{label}_{time_index}_{node_number}")
             with right:
                 st.subheader("Estado y derivadas del nodo")
                 node_values = pd.DataFrame(
@@ -1049,10 +1048,10 @@ if main_section == "Simulación":
                         ],
                     }
                 )
-                st.dataframe(node_values, use_container_width=True, hide_index=True)
+                st.dataframe(node_values, width="stretch", hide_index=True)
             node_table = result.node_dataframe(time_index)
             st.subheader("Todos los nodos en el instante seleccionado")
-            st.dataframe(node_table, use_container_width=True, hide_index=True)
+            st.dataframe(node_table, width="stretch", hide_index=True)
             st.download_button(
                 "Descargar nodos del instante CSV",
                 data=node_table.to_csv(index=False).encode("utf-8"),
@@ -1118,14 +1117,14 @@ if main_section == "Simulación":
             data=report_text_with_validation.encode("utf-8"),
             file_name="reporte_tecnico_ptc.txt",
             mime="text/plain",
-            use_container_width=True,
+            width="stretch",
         )
         export_cols[1].download_button(
             "Guardar proyecto JSON",
             data=project_json,
             file_name="proyecto_ptc.json",
             mime="application/json",
-            use_container_width=True,
+            width="stretch",
         )
         if st.session_state.results:
             buffer = io.BytesIO()
@@ -1144,7 +1143,7 @@ if main_section == "Simulación":
                 data=buffer.getvalue(),
                 file_name="resultados_ptc.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
             )
         else:
             export_cols[2].info("Ejecute una simulación para habilitar XLSX.")
@@ -1166,7 +1165,7 @@ elif main_section == "Propiedades":
         else:
             solar_window = f"{_format_lat_hour(solar_day['sunrise_h'])} – {_format_lat_hour(solar_day['sunset_h'])}"
         solar_cols[3].metric("Ventana solar LAT", solar_window)
-        st.plotly_chart(daily_irradiance_histogram(solar_day["hourly"]), use_container_width=True)
+        st.plotly_chart(daily_irradiance_histogram(solar_day["hourly"]), width="stretch", key="properties_daily_irradiance")
         st.caption(
             f"Energía diaria proyectada sobre la apertura antes de pérdidas ópticas: "
             f"{solar_day['beam_daily_kWh_m2']:.2f} kWh/m². "
@@ -1259,7 +1258,7 @@ elif main_section == "Propiedades":
         edited_table = st.data_editor(
             table,
             num_rows="dynamic",
-            use_container_width=True,
+            width="stretch",
             key=f"property_table_{fluid_key}",
         )
         spec["table"] = {column: edited_table[column].tolist() for column in edited_table.columns}
@@ -1267,14 +1266,14 @@ elif main_section == "Propiedades":
             st.info("En modo original, la tabla de agua es solo una vista de referencia. Para usar los valores editados, seleccione Tabla completa editable + PCHIP.")
     try:
         curve = property_curve(fluid_key, fluid_db, -10.0, 320.0, 250)
-        st.plotly_chart(property_figure(curve, spec.get("display_name", fluid_key)), use_container_width=True)
+        st.plotly_chart(property_figure(curve, spec.get("display_name", fluid_key)), width="stretch", key=f"properties_fluid_curve_{fluid_key}")
     except Exception as exc:
         st.error(f"No fue posible evaluar las propiedades: {exc}")
 
     st.divider()
     st.subheader("Perfil horario de irradiación")
     profile_df = pd.DataFrame(cfg["solar"]["profile"])
-    profile_edited = st.data_editor(profile_df, num_rows="dynamic", use_container_width=True, key="solar_profile_editor")
+    profile_edited = st.data_editor(profile_df, num_rows="dynamic", width="stretch", key="solar_profile_editor")
     cfg["solar"]["profile"] = {column: profile_edited[column].tolist() for column in profile_edited.columns}
     st.caption("Este perfil se usa cuando el modo de irradiación es Perfil horario editable.")
 
@@ -1329,7 +1328,7 @@ elif main_section == "Validación":
             for pid in selected_ids
         ])
         with st.expander("Parámetros que entrarán en la calibración", expanded=False):
-            st.dataframe(preview, use_container_width=True, hide_index=True)
+            st.dataframe(preview, width="stretch", hide_index=True)
 
     controls = st.columns([1.0, 1.35])
     max_nfev = controls[0].slider(
@@ -1343,7 +1342,7 @@ elif main_section == "Validación":
     run_validation = controls[1].button(
         "Calibrar con 4 meses y validar en 8 no usados",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=not selected_ids,
         key="run_calibration_holdout_v14",
     )
@@ -1384,7 +1383,7 @@ elif main_section == "Validación":
         holdout_table = comparison.loc[comparison["Conjunto"] == "validación"].copy() if not comparison.empty else pd.DataFrame()
         if not holdout_table.empty:
             st.markdown("**Datos no usados durante la calibración**")
-            st.dataframe(holdout_table, use_container_width=True, hide_index=True)
+            st.dataframe(holdout_table, width="stretch", hide_index=True)
             eta_hold = holdout_table.loc[holdout_table["Magnitud"] == "Eta_pct"].copy()
             if not eta_hold.empty:
                 improved = eta_hold.loc[eta_hold["Error_calibrado_pct"].abs() < eta_hold["Error_inicial_pct"].abs()]
@@ -1404,12 +1403,12 @@ elif main_section == "Validación":
                     )
 
         st.markdown("**Parámetros calibrados**")
-        st.dataframe(validation_result["parameter_table"], use_container_width=True, hide_index=True)
+        st.dataframe(validation_result["parameter_table"], width="stretch", hide_index=True)
         action = st.columns(2)
         if action[0].button(
             "Usar parámetros calibrados en el simulador",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key="apply_latest_calibration_v14",
         ):
             try:
@@ -1431,7 +1430,7 @@ elif main_section == "Validación":
             data=export_validation.getvalue(),
             file_name=f"validacion_holdout_{validation_case}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
     st.divider()
@@ -1441,14 +1440,14 @@ elif main_section == "Validación":
             "Bhambare/Sukhatme es un único caso; Fiamonzini Tabela 8 carece de varias entradas horarias experimentales."
         )
         bench_cols = st.columns(2)
-        if bench_cols[0].button("Bhambare vs Sukhatme", use_container_width=True, key="compact_bhambare_v14"):
+        if bench_cols[0].button("Bhambare vs Sukhatme", width="stretch", key="compact_bhambare_v14"):
             try:
                 st.session_state.validations["compact_bhambare"] = validate_bhambare_mode(
                     fluid_db, target_key="sukhatme", parameter_template="nominal"
                 )
             except Exception as exc:
                 st.exception(exc)
-        if bench_cols[1].button("Rea/Fiamonzini · Tabela 8", use_container_width=True, key="compact_rea_proto_v14"):
+        if bench_cols[1].button("Rea/Fiamonzini · Tabela 8", width="stretch", key="compact_rea_proto_v14"):
             try:
                 st.session_state.validations["compact_prototype"] = validate_rea_prototype_mode(
                     "trnsys_published", fluid_db, target_key="experimental", dni_source="nominal", parameter_template="nominal"
@@ -1463,7 +1462,7 @@ elif main_section == "Validación":
             c[1].metric("MAPE multivariable", f"{bm['MAPE_multivariable_pct']:.2f} %")
             c[2].metric("Bias relativo", f"{bm['Bias_rel_medio_pct']:+.2f} %")
             c[3].metric("Error máximo", f"{bm['Error_max_pct']:.2f} %")
-            st.dataframe(bv["table"], use_container_width=True, hide_index=True)
+            st.dataframe(bv["table"], width="stretch", hide_index=True)
         if "compact_prototype" in st.session_state.validations:
             pv = st.session_state.validations["compact_prototype"]
             pm = pv["metrics"]
@@ -1472,7 +1471,7 @@ elif main_section == "Validación":
             c[1].metric("RMSE η", f"{pm['RMSE_pp']:.2f} pp")
             c[2].metric("MAPE η", f"{pm['MAPE_pct']:.2f} %")
             c[3].metric("η Python media", f"{pm['Eta_python_mean_pct']:.2f} %")
-            st.dataframe(pv["table"], use_container_width=True, hide_index=True)
+            st.dataframe(pv["table"], width="stretch", hide_index=True)
 
 elif main_section == "Sensibilidad":
     st.subheader("Sensibilidad y convergencia")
@@ -1486,7 +1485,7 @@ elif main_section == "Sensibilidad":
     if sens_cols[0].button(
         "1 · Ejecutar convergencia numérica",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         help="Barre nodos, max_step, tolerancias y tiempo de calentamiento.",
     ):
         try:
@@ -1497,7 +1496,7 @@ elif main_section == "Sensibilidad":
 
     if sens_cols[1].button(
         "2 · Ejecutar sensibilidad física ±10 %",
-        use_container_width=True,
+        width="stretch",
         help="Perturba un parámetro por vez y mide cuánto cambia el ajuste a Sukhatme.",
     ):
         try:
@@ -1517,7 +1516,7 @@ elif main_section == "Sensibilidad":
         c[1].metric("N para <0.1 %", str(summary["N_0p1pct"] or "—"))
         c[2].metric("Span Tout por malla", f"{summary['mesh_span_Tout_C']:.5f} °C")
         c[3].metric("Span Qloss por malla", f"{summary['mesh_span_Qloss_W']:.2f} W")
-        st.plotly_chart(numerical_convergence_figure(analysis["mesh_table"]), use_container_width=True)
+        st.plotly_chart(numerical_convergence_figure(analysis["mesh_table"]), width="stretch", key="sensitivity_numerical_convergence")
 
         group = st.selectbox(
             "Detalle numérico",
@@ -1525,13 +1524,13 @@ elif main_section == "Sensibilidad":
             key="sensitivity_numeric_group",
         )
         detail = analysis["table"].loc[analysis["table"]["Grupo"] == group].copy()
-        st.dataframe(detail, use_container_width=True, hide_index=True)
+        st.dataframe(detail, width="stretch", hide_index=True)
         st.download_button(
             "Descargar convergencia numérica · CSV",
             data=analysis["table"].to_csv(index=False).encode("utf-8"),
             file_name="ptc_convergencia_numerica_bhambare.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
         if summary["N_0p5pct"] is not None and summary["N_0p5pct"] <= 12:
@@ -1554,19 +1553,19 @@ elif main_section == "Sensibilidad":
         c[3].metric("Tvid Python / ref", f"{baseline['Tvid_K']:.2f} / {reference['Tvid_K']:.2f} K")
         c[4].metric("Qloss Python / ref", f"{baseline['Qloss_W']:.1f} / {reference['Qloss_W']:.1f} W")
 
-        st.plotly_chart(sensitivity_tornado_figure(analysis["table"]), use_container_width=True)
+        st.plotly_chart(sensitivity_tornado_figure(analysis["table"]), width="stretch", key="sensitivity_physical_tornado")
         display_cols = [
             "Parametro", "Categoria", "Nominal", "Valor_menos", "Valor_mas",
             "Mejor_direccion", "Mejora_score_pp", "Mejor_score_pct",
             "S_Tout_C", "S_Tabs_K", "S_Tvid_K", "S_Qloss_W", "S_eta_pct",
         ]
-        st.dataframe(analysis["table"][display_cols], use_container_width=True, hide_index=True)
+        st.dataframe(analysis["table"][display_cols], width="stretch", hide_index=True)
         st.download_button(
             "Descargar sensibilidad física · CSV",
             data=analysis["table"].to_csv(index=False).encode("utf-8"),
             file_name="ptc_sensibilidad_fisica_bhambare.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
         top = analysis["table"].iloc[0]

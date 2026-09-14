@@ -232,3 +232,8 @@ Para comparar con la ecuación experimental (10) de Rea Quille se usa `eta_DNI =
 
 ## V13 — validación Bhambare por errores
 La pestaña **Validación** incluye ahora una comparación multivariable para Bhambare/Sukhatme con selección de referencia documental o de los benchmarks del XLSX de identificación del 14/09/2026. Las métricas globales se calculan sobre residuos relativos normalizados porque las salidas comparadas tienen unidades distintas.
+
+
+## V14.1 — compatibilidad Streamlit
+
+Se corrigieron IDs duplicados de gráficos Plotly y APIs deprecadas de Streamlit. Requiere Streamlit >= 1.56.0. No cambia el modelo físico.
