@@ -1583,6 +1583,34 @@ def _score_from_residuals(residuals: Sequence[float]) -> float:
     return 100.0 * float(np.sqrt(np.mean(np.square(arr)))) if arr.size else float("nan")
 
 
+
+def apply_calibrated_parameters(
+    config: dict[str, Any],
+    fluid_database: dict[str, Any],
+    calibration: Mapping[str, Any],
+) -> None:
+    """Aplica al proyecto activo los parámetros de una calibración inversa.
+
+    La función usa exclusivamente la tabla ``parameter_table`` producida por
+    :func:`calibrate_inverse_model`. Esto permite que la UI aplique una
+    calibración recién calculada sin depender de templates hardcodeados.
+    """
+    table = calibration.get("parameter_table") if isinstance(calibration, Mapping) else None
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        raise ValueError("La calibración no contiene una tabla de parámetros aplicable.")
+    required = {"ID", "Identificado"}
+    if not required.issubset(table.columns):
+        raise ValueError("La tabla de calibración no contiene ID e Identificado.")
+    parameter_ids = [str(value) for value in table["ID"].tolist()]
+    values = [float(value) for value in table["Identificado"].tolist()]
+    _apply_inverse_parameters(config, fluid_database, parameter_ids, values)
+    config["calibration_meta"] = {
+        "case": str(calibration.get("case", "")),
+        "score_before_pct": float(calibration.get("score_before_pct", float("nan"))),
+        "score_after_pct": float(calibration.get("score_after_pct", float("nan"))),
+        "parameters": {pid: value for pid, value in zip(parameter_ids, values)},
+    }
+
 def calibrate_inverse_model(
     case: str,
     fluid_database: Mapping[str, Mapping[str, Any]],

@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -27,6 +27,7 @@ from validations import (
     inverse_parameter_options,
     identified_parameter_template,
     apply_identified_parameter_template,
+    apply_calibrated_parameters,
     bhambare_user_inverse_template,
     validate_bhambare_mode,
     prototype_tcc_table,
@@ -399,11 +400,96 @@ def render_axial_node_selector(
     return int(st.session_state[state_key])
 
 
+def solar_input_is_temporally_variable(result: SimulationResult) -> bool:
+    """True si la potencia solar absorbida cambia de forma apreciable en el tiempo.
+
+    Se evalúa la fuente térmica realmente aplicada al receptor, no solamente DNI.
+    Así un DNI constante con geometría/IAM variables sigue considerándose una
+    entrada solar temporal.
+    """
+    q_abs = np.asarray(result.scalar_diag.get("QsolarAbs_W", []), dtype=float)
+    q_glass = np.asarray(result.scalar_diag.get("QsolarGlass_W", []), dtype=float)
+    if q_abs.size == 0:
+        return False
+    q = q_abs + (q_glass if q_glass.size == q_abs.size else 0.0)
+    finite = q[np.isfinite(q)]
+    if finite.size < 2:
+        return False
+    scale = max(float(np.nanmax(np.abs(finite))), 1.0)
+    return float(np.nanmax(finite) - np.nanmin(finite)) > 1e-5 * scale
+
+
+def calibration_error_summary(calibration: Mapping[str, Any] | None) -> dict[str, float]:
+    """Indicadores rápidos del hold-out de la última calibración/validación."""
+    if not isinstance(calibration, Mapping):
+        return {}
+    table = calibration.get("predictions_after")
+    if not isinstance(table, pd.DataFrame) or table.empty or "Conjunto" not in table.columns:
+        return {}
+    hold = table.loc[table["Conjunto"] == "validación"].copy()
+    if hold.empty:
+        return {}
+
+    out: dict[str, float] = {}
+    for magnitude, prefix in (("Eta_pct", "eta"), ("Tout_C", "tout")):
+        part = hold.loc[hold["Magnitud"] == magnitude]
+        if part.empty:
+            continue
+        ref = part["Referencia"].to_numpy(float)
+        model = part["Modelo"].to_numpy(float)
+        err = model - ref
+        out[f"{prefix}_mae"] = float(np.mean(np.abs(err)))
+        out[f"{prefix}_rmse"] = float(np.sqrt(np.mean(err**2)))
+        out[f"{prefix}_bias"] = float(np.mean(err))
+        valid = np.abs(ref) > 1e-12
+        out[f"{prefix}_mape_pct"] = float(np.mean(np.abs(err[valid] / ref[valid])) * 100.0) if np.any(valid) else float("nan")
+        out[f"{prefix}_max_rel_pct"] = float(np.max(np.abs(err[valid] / ref[valid])) * 100.0) if np.any(valid) else float("nan")
+
+    validation_summary = calibration.get("validation_summary", {}) or {}
+    if "holdout_score_after_pct" in validation_summary:
+        out["holdout_score_pct"] = float(validation_summary["holdout_score_after_pct"])
+    if "holdout_score_before_pct" in validation_summary:
+        out["holdout_score_before_pct"] = float(validation_summary["holdout_score_before_pct"])
+    return out
+
+
+def validation_comparison_table(calibration: Mapping[str, Any] | None) -> pd.DataFrame:
+    if not isinstance(calibration, Mapping):
+        return pd.DataFrame()
+    before = calibration.get("predictions_before")
+    after = calibration.get("predictions_after")
+    if not isinstance(before, pd.DataFrame) or not isinstance(after, pd.DataFrame):
+        return pd.DataFrame()
+    before = before.copy().rename(columns={
+        "Modelo": "Modelo_inicial",
+        "Error_rel_pct": "Error_inicial_pct",
+        "Residual_obj": "Residual_inicial",
+    })
+    after = after.copy().rename(columns={
+        "Modelo": "Modelo_calibrado",
+        "Error_rel_pct": "Error_calibrado_pct",
+        "Residual_obj": "Residual_calibrado",
+    })
+    keys = ["Conjunto", "Caso", "Magnitud", "Referencia"]
+    return before.merge(after, on=keys, how="outer")
+
+
 initialize_state()
 cfg = st.session_state.config
 fluid_db = st.session_state.fluid_database
 
-st.title("Modelo nodal de colector cilindro-parabólico")
+header_left, header_right = st.columns([5.2, 1.35], vertical_alignment="center")
+with header_left:
+    st.title("Modelo nodal de colector cilindro-parabólico")
+with header_right:
+    run_clicked = st.button(
+        "▶ Ejecutar simulación",
+        type="primary",
+        use_container_width=True,
+        key="run_simulation_top",
+        help="Ejecuta la configuración actual. El botón permanece arriba para evitar bajar por la página.",
+    )
+
 with st.sidebar:
     st.header("Configuración")
 
@@ -731,7 +817,6 @@ with st.sidebar:
     st.divider()
     sweep = st.checkbox("Barrido comparativo de caudales", value=False)
     sweep_text = st.text_input("Caudales (kg/s), separados por coma", value="0.015, 0.045, 0.090", disabled=not sweep)
-    run_clicked = st.button("Ejecutar simulación", type="primary", use_container_width=True)
 
 if run_clicked:
     try:
@@ -761,206 +846,310 @@ if run_clicked:
 if st.session_state.results and st.session_state.result_signature != project_signature():
     st.warning("Los parámetros visibles cambiaron después de la última simulación. Ejecute nuevamente para actualizar los resultados.")
 
-tab_sim, tab_nodes, tab_props, tab_validation, tab_sensitivity, tab_report = st.tabs(
-    ["Simulación", "Nodo por nodo", "Propiedades e irradiación", "Validación", "Sensibilidad", "Reporte y exportación"]
+main_section = st.radio(
+    "Sección principal",
+    ["Simulación", "Propiedades", "Validación", "Sensibilidad"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="main_section_v14",
 )
+st.caption({
+    "Simulación": "Resultados, análisis nodal y exportación del caso activo.",
+    "Propiedades": "Irradiación, cielo y propiedades termofísicas del HTF.",
+    "Validación": "Calibración con muestra y prueba fuera de muestra con parámetros congelados.",
+    "Sensibilidad": "Convergencia numérica y efecto de perturbaciones paramétricas sobre las salidas.",
+}[main_section])
 
-with tab_sim:
-    label, result = active_result_selector("simulation")
-    if result is None:
-        st.info("Configure el caso y pulse Ejecutar simulación.")
-    else:
-        k_ref, _ = representative_time_index(result)
-
-        cols = st.columns(6)
-        cols[0].metric("DNI", f"{result.scalar_diag['DNI_W_m2'][k_ref]:.1f} W/m²")
-        cols[1].metric("T salida", f"{result.Tout_C[k_ref]:.2f} °C")
-        cols[2].metric("T absorbedor", f"{result.Tabs_mean_C[k_ref]:.2f} °C")
-        cols[3].metric("Q útil", f"{result.scalar_diag['Quseful_W'][k_ref]:.1f} W")
-        cols[4].metric("Q pérdidas", f"{result.scalar_diag['Qloss_W'][k_ref]:.1f} W")
-        cols[5].metric("η térmica HTF", f"{result.scalar_diag['eta_pct'][k_ref]:.2f} %")
-        qinc = np.asarray(result.scalar_diag["Qincident_W"], dtype=float)
-        quse = np.asarray(result.scalar_diag["Quseful_W"], dtype=float)
-        einc = integrate_trapezoid(qinc, result.t_s) if len(result.t_s) > 1 else float("nan")
-        euse = integrate_trapezoid(quse, result.t_s) if len(result.t_s) > 1 else float("nan")
-        eta_period = 100.0 * euse / einc if np.isfinite(einc) and einc > 0.0 else float("nan")
-        re_out = float(result.node_diag["Re_internal"][k_ref, -1])
-        re_lam = float(result.config["model"].get("Re_laminar_max", 2300.0))
-        re_turb = float(result.config["model"].get("Re_turbulent_min", 4000.0))
-        regime = "laminar" if re_out <= re_lam else ("transición" if re_out < re_turb else "turbulento")
-        diag_cols = st.columns(4)
-        diag_cols[0].metric("η óptica al absorbedor", f"{result.scalar_diag['eta_optical_abs_pct'][k_ref]:.2f} %")
-        diag_cols[1].metric("η integrada del período", f"{eta_period:.2f} %")
-        diag_cols[2].metric("Re salida", f"{re_out:.0f}")
-        diag_cols[3].metric("Régimen salida", regime)
-        result_meta = result.config.get("preset_meta", {})
-        source_ref = result_meta.get("reference", {})
-        if source_ref:
-            with st.expander("Comparación rápida con la referencia del preset", expanded=True):
-                ref_cols = st.columns(4)
-                ref_cols[0].metric("Fuente", str(result_meta.get("reference_table", "—")))
-                if "eta_pct" in source_ref:
-                    eta_ref = float(source_ref["eta_pct"])
-                    eta_py = float(result.scalar_diag["eta_pct"][k_ref])
-                    ref_cols[1].metric("η referencia", f"{eta_ref:.2f} %")
-                    ref_cols[2].metric("η Python", f"{eta_py:.2f} %", delta=f"{eta_py - eta_ref:+.2f} pp")
-                    if "Tout_C" in source_ref:
-                        ref_cols[3].metric("Tout ref / Python", f"{float(source_ref['Tout_C']):.2f} / {result.Tout_C[k_ref]:.2f} °C")
-                elif "eta_exp_mean_pct" in source_ref:
-                    eta_py = float(result.scalar_diag["eta_pct"][k_ref])
-                    ref_cols[1].metric("η exp. media", f"{float(source_ref['eta_exp_mean_pct']):.2f} %")
-                    ref_cols[2].metric("η TRNSYS media", f"{float(source_ref['eta_trnsys_mean_pct']):.2f} %")
-                    ref_cols[3].metric("η Python", f"{eta_py:.2f} %")
-                    st.warning("Tabela 8 no publica Tin/Tout horarios; la comparación Python depende de la Tin asumida en el preset y no es una validación estricta.")
-                elif "Tout_book_C" in source_ref:
-                    ref_cols[1].metric("Tout Sukhatme", f"{float(source_ref['Tout_book_C']):.2f} °C")
-                    ref_cols[2].metric("Tout Bhambare", f"{float(source_ref['Tout_article_C']):.2f} °C")
-                    ref_cols[3].metric("Tout Python", f"{result.Tout_C[k_ref]:.2f} °C")
-
-        if len(st.session_state.results) > 1:
-            st.plotly_chart(comparative_overview(st.session_state.results), use_container_width=True)
+if main_section == "Simulación":
+    sim_tab_results, sim_tab_nodes, sim_tab_report = st.tabs(["Resultados", "Nodo por nodo", "Reporte y exportación"])
+    with sim_tab_results:
+        label, result = active_result_selector("simulation")
+        if result is None:
+            st.info("Configure el caso y pulse Ejecutar simulación.")
         else:
-            st.plotly_chart(dynamic_overview(result), use_container_width=True)
-        with st.expander("Resumen del solver y del escenario"):
-            st.code(result_summary(result), language="text")
-        scalar_csv = result.scalar_dataframe().to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Descargar serie temporal CSV",
-            data=scalar_csv,
-            file_name="resultado_ptc_temporal.csv",
-            mime="text/csv",
-        )
+            k_ref, _ = representative_time_index(result)
 
-with tab_nodes:
-    label, result = active_result_selector("nodes")
-    if result is None:
-        st.info("Primero ejecute una simulación.")
-    else:
-        node_default_index, _ = representative_time_index(result)
-        time_index = st.slider(
-            "Instante de análisis",
-            min_value=0,
-            max_value=len(result.t_s) - 1,
-            value=node_default_index,
-            format="índice %d",
-            key=f"node_time_index_{label}",
-        )
-        state_key = f"selected_node_{label}"
-        if state_key not in st.session_state:
-            st.session_state[state_key] = min(1, result.n_segments)
-        else:
-            st.session_state[state_key] = int(np.clip(st.session_state[state_key], 1, result.n_segments))
-
-        st.subheader("Selector axial interactivo")
-        node_number = render_axial_node_selector(result, time_index, state_key, label)
-        node_index = node_number - 1
-        snapshot = result.node_snapshot(time_index, node_index)
-        st.caption(f"LAT = {snapshot['LAT_h']:.3f} h; nodo {node_number}; x = {(node_index + 0.5) * result.config['geometry']['L'] / result.n_segments:.3f} m")
-
-        q_to_htf = float(snapshot["Qfluid_W"])
-        q_htf_rise = -float(snapshot["Qadvection_W"])
-        q_fluid_storage = q_to_htf - q_htf_rise
-        q_abs_to_glass = float(snapshot["Qrad_abs_glass_W"] + snapshot["Qconv_annulus_W"])
-        q_external_loss = float(snapshot["Qconv_external_W"] + snapshot["Qrad_sky_W"] + snapshot["Qsupports_W"])
-        flow_cols = st.columns(6)
-        flow_cols[0].metric("Q solar / nodo", f"{snapshot['Qsolar_abs_node_W']:.2f} W")
-        flow_cols[1].metric("Absorbedor → HTF", f"{q_to_htf:.2f} W")
-        flow_cols[2].metric("ΔH axial del HTF", f"{q_htf_rise:.2f} W")
-        flow_cols[3].metric("Absorbedor → vidrio", f"{q_abs_to_glass:.2f} W")
-        flow_cols[4].metric("Pérdida exterior", f"{q_external_loss:.2f} W")
-        flow_cols[5].metric("Acumulación HTF", f"{q_fluid_storage:.3e} W")
-        st.caption(
-            "Balance del HTF por nodo: C_f·dTf/dt = Q_absorbedor→HTF - ΔH_axial. "
-            "En equilibrio térmico dTf/dt ≈ 0, pero ambos términos permanecen finitos y casi iguales."
-        )
-
-        st.subheader("Sección transversal interactiva del PTC")
-        components.html(
-            ptc_optical_component_html(result.config, snapshot, node_index),
-            height=735,
-            scrolling=False,
-        )
-
-        st.subheader("Circuito térmico")
-        components.html(
-            thermal_circuit_component_html(result.config, snapshot),
-            height=690,
-            scrolling=False,
-        )
-
-        st.plotly_chart(axial_profiles(result, time_index), use_container_width=True)
-        left, right = st.columns([1.1, 0.9])
-        with left:
-            st.plotly_chart(node_balance(snapshot, bool(result.config["model"]["has_glass"])), use_container_width=True)
-        with right:
-            st.subheader("Estado y derivadas del nodo")
-            node_values = pd.DataFrame(
-                {
-                    "Magnitud": [
-                        "Tf",
-                        "Tabs",
-                        "Tvidrio",
-                        "dTf/dt",
-                        "dTabs/dt",
-                        "dTvid/dt",
-                        "Re",
-                        "Pr",
-                        "Nu",
-                        "Peso transición",
-                        "h interno",
-                        "rho",
-                        "mu",
-                        "Cp",
-                        "k",
-                    ],
-                    "Valor": [
-                        snapshot["Tf_C"],
-                        snapshot["Tabs_C"],
-                        snapshot["Tglass_C"],
-                        snapshot["dTf_dt_K_s"],
-                        snapshot["dTabs_dt_K_s"],
-                        snapshot["dTglass_dt_K_s"],
-                        snapshot["Re_internal"],
-                        snapshot["Pr_internal"],
-                        snapshot["Nu_internal"],
-                        snapshot["transition_weight"],
-                        snapshot["h_internal_W_m2K"],
-                        snapshot["rho_kg_m3"],
-                        snapshot["mu_Pa_s"],
-                        snapshot["Cp_J_kgK"],
-                        snapshot["k_W_mK"],
-                    ],
-                    "Unidad": [
-                        "°C",
-                        "°C",
-                        "°C",
-                        "K/s",
-                        "K/s",
-                        "K/s",
-                        "-",
-                        "-",
-                        "-",
-                        "-",
-                        "W/(m² K)",
-                        "kg/m³",
-                        "Pa·s",
-                        "J/(kg K)",
-                        "W/(m K)",
-                    ],
-                }
+            cols = st.columns(6)
+            cols[0].metric("DNI", f"{result.scalar_diag['DNI_W_m2'][k_ref]:.1f} W/m²")
+            cols[1].metric("T salida", f"{result.Tout_C[k_ref]:.2f} °C")
+            cols[2].metric("T absorbedor", f"{result.Tabs_mean_C[k_ref]:.2f} °C")
+            cols[3].metric("Q útil", f"{result.scalar_diag['Quseful_W'][k_ref]:.1f} W")
+            cols[4].metric("Q pérdidas", f"{result.scalar_diag['Qloss_W'][k_ref]:.1f} W")
+            cols[5].metric("η térmica HTF", f"{result.scalar_diag['eta_pct'][k_ref]:.2f} %")
+            qinc = np.asarray(result.scalar_diag["Qincident_W"], dtype=float)
+            quse = np.asarray(result.scalar_diag["Quseful_W"], dtype=float)
+            einc = integrate_trapezoid(qinc, result.t_s) if len(result.t_s) > 1 else float("nan")
+            euse = integrate_trapezoid(quse, result.t_s) if len(result.t_s) > 1 else float("nan")
+            eta_period = 100.0 * euse / einc if np.isfinite(einc) and einc > 0.0 else float("nan")
+            re_out = float(result.node_diag["Re_internal"][k_ref, -1])
+            re_lam = float(result.config["model"].get("Re_laminar_max", 2300.0))
+            re_turb = float(result.config["model"].get("Re_turbulent_min", 4000.0))
+            regime = "laminar" if re_out <= re_lam else ("transición" if re_out < re_turb else "turbulento")
+            solar_varies = solar_input_is_temporally_variable(result)
+            diag_cols = st.columns(4)
+            diag_cols[0].metric("η óptica al absorbedor", f"{result.scalar_diag['eta_optical_abs_pct'][k_ref]:.2f} %")
+            if solar_varies:
+                diag_cols[1].metric("η integrada del período", f"{eta_period:.2f} %")
+            else:
+                diag_cols[1].metric("Modo de resultado", "Estado representativo")
+            diag_cols[2].metric("Re salida", f"{re_out:.0f}")
+            diag_cols[3].metric("Régimen salida", regime)
+            if solar_varies:
+                if len(st.session_state.results) > 1:
+                    st.plotly_chart(comparative_overview(st.session_state.results), use_container_width=True)
+                else:
+                    st.plotly_chart(dynamic_overview(result), use_container_width=True)
+            else:
+                st.info(
+                    "La entrada solar aplicada al receptor es constante. Se omite la respuesta transitoria: "
+                    "mostrar el calentamiento desde una condición inicial arbitraria no aporta a la comparación estacionaria. "
+                    "Se muestran directamente el estado representativo y los perfiles axiales."
+                )
+                if len(st.session_state.results) > 1:
+                    rows = []
+                    for scenario_name, scenario_result in st.session_state.results.items():
+                        kk, _ = representative_time_index(scenario_result)
+                        rows.append({
+                            "Escenario": scenario_name,
+                            "Tout_C": float(scenario_result.Tout_C[kk]),
+                            "Tabs_C": float(scenario_result.Tabs_mean_C[kk]),
+                            "Tvid_C": float(scenario_result.Tglass_mean_C[kk]),
+                            "Qutil_W": float(scenario_result.scalar_diag["Quseful_W"][kk]),
+                            "Qloss_W": float(scenario_result.scalar_diag["Qloss_W"][kk]),
+                            "Eta_pct": float(scenario_result.scalar_diag["eta_pct"][kk]),
+                        })
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.plotly_chart(axial_profiles(result, k_ref), use_container_width=True)
+            with st.expander("Resumen del solver y del escenario"):
+                st.code(result_summary(result), language="text")
+            scalar_csv = result.scalar_dataframe().to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Descargar serie temporal CSV",
+                data=scalar_csv,
+                file_name="resultado_ptc_temporal.csv",
+                mime="text/csv",
             )
-            st.dataframe(node_values, use_container_width=True, hide_index=True)
-        node_table = result.node_dataframe(time_index)
-        st.subheader("Todos los nodos en el instante seleccionado")
-        st.dataframe(node_table, use_container_width=True, hide_index=True)
-        st.download_button(
-            "Descargar nodos del instante CSV",
-            data=node_table.to_csv(index=False).encode("utf-8"),
-            file_name=f"nodos_LAT_{snapshot['LAT_h']:.3f}.csv",
-            mime="text/csv",
-        )
 
-with tab_props:
+
+    with sim_tab_nodes:
+        label, result = active_result_selector("nodes")
+        if result is None:
+            st.info("Primero ejecute una simulación.")
+        else:
+            node_default_index, _ = representative_time_index(result)
+            time_index = st.slider(
+                "Instante de análisis",
+                min_value=0,
+                max_value=len(result.t_s) - 1,
+                value=node_default_index,
+                format="índice %d",
+                key=f"node_time_index_{label}",
+            )
+            state_key = f"selected_node_{label}"
+            if state_key not in st.session_state:
+                st.session_state[state_key] = min(1, result.n_segments)
+            else:
+                st.session_state[state_key] = int(np.clip(st.session_state[state_key], 1, result.n_segments))
+
+            st.subheader("Selector axial interactivo")
+            node_number = render_axial_node_selector(result, time_index, state_key, label)
+            node_index = node_number - 1
+            snapshot = result.node_snapshot(time_index, node_index)
+            st.caption(f"LAT = {snapshot['LAT_h']:.3f} h; nodo {node_number}; x = {(node_index + 0.5) * result.config['geometry']['L'] / result.n_segments:.3f} m")
+
+            q_to_htf = float(snapshot["Qfluid_W"])
+            q_htf_rise = -float(snapshot["Qadvection_W"])
+            q_fluid_storage = q_to_htf - q_htf_rise
+            q_abs_to_glass = float(snapshot["Qrad_abs_glass_W"] + snapshot["Qconv_annulus_W"])
+            q_external_loss = float(snapshot["Qconv_external_W"] + snapshot["Qrad_sky_W"] + snapshot["Qsupports_W"])
+            flow_cols = st.columns(6)
+            flow_cols[0].metric("Q solar / nodo", f"{snapshot['Qsolar_abs_node_W']:.2f} W")
+            flow_cols[1].metric("Absorbedor → HTF", f"{q_to_htf:.2f} W")
+            flow_cols[2].metric("ΔH axial del HTF", f"{q_htf_rise:.2f} W")
+            flow_cols[3].metric("Absorbedor → vidrio", f"{q_abs_to_glass:.2f} W")
+            flow_cols[4].metric("Pérdida exterior", f"{q_external_loss:.2f} W")
+            flow_cols[5].metric("Acumulación HTF", f"{q_fluid_storage:.3e} W")
+            st.caption(
+                "Balance del HTF por nodo: C_f·dTf/dt = Q_absorbedor→HTF - ΔH_axial. "
+                "En equilibrio térmico dTf/dt ≈ 0, pero ambos términos permanecen finitos y casi iguales."
+            )
+
+            st.subheader("Sección transversal interactiva del PTC")
+            components.html(
+                ptc_optical_component_html(result.config, snapshot, node_index),
+                height=735,
+                scrolling=False,
+            )
+
+            st.subheader("Circuito térmico")
+            components.html(
+                thermal_circuit_component_html(result.config, snapshot),
+                height=690,
+                scrolling=False,
+            )
+
+            st.plotly_chart(axial_profiles(result, time_index), use_container_width=True)
+            left, right = st.columns([1.1, 0.9])
+            with left:
+                st.plotly_chart(node_balance(snapshot, bool(result.config["model"]["has_glass"])), use_container_width=True)
+            with right:
+                st.subheader("Estado y derivadas del nodo")
+                node_values = pd.DataFrame(
+                    {
+                        "Magnitud": [
+                            "Tf",
+                            "Tabs",
+                            "Tvidrio",
+                            "dTf/dt",
+                            "dTabs/dt",
+                            "dTvid/dt",
+                            "Re",
+                            "Pr",
+                            "Nu",
+                            "Peso transición",
+                            "h interno",
+                            "rho",
+                            "mu",
+                            "Cp",
+                            "k",
+                        ],
+                        "Valor": [
+                            snapshot["Tf_C"],
+                            snapshot["Tabs_C"],
+                            snapshot["Tglass_C"],
+                            snapshot["dTf_dt_K_s"],
+                            snapshot["dTabs_dt_K_s"],
+                            snapshot["dTglass_dt_K_s"],
+                            snapshot["Re_internal"],
+                            snapshot["Pr_internal"],
+                            snapshot["Nu_internal"],
+                            snapshot["transition_weight"],
+                            snapshot["h_internal_W_m2K"],
+                            snapshot["rho_kg_m3"],
+                            snapshot["mu_Pa_s"],
+                            snapshot["Cp_J_kgK"],
+                            snapshot["k_W_mK"],
+                        ],
+                        "Unidad": [
+                            "°C",
+                            "°C",
+                            "°C",
+                            "K/s",
+                            "K/s",
+                            "K/s",
+                            "-",
+                            "-",
+                            "-",
+                            "-",
+                            "W/(m² K)",
+                            "kg/m³",
+                            "Pa·s",
+                            "J/(kg K)",
+                            "W/(m K)",
+                        ],
+                    }
+                )
+                st.dataframe(node_values, use_container_width=True, hide_index=True)
+            node_table = result.node_dataframe(time_index)
+            st.subheader("Todos los nodos en el instante seleccionado")
+            st.dataframe(node_table, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Descargar nodos del instante CSV",
+                data=node_table.to_csv(index=False).encode("utf-8"),
+                file_name=f"nodos_LAT_{snapshot['LAT_h']:.3f}.csv",
+                mime="text/csv",
+            )
+
+
+    with sim_tab_report:
+        report_text = build_technical_report(cfg)
+        validation_result = st.session_state.validations.get("model_validation")
+        validation_metrics = calibration_error_summary(validation_result)
+        comparison = validation_comparison_table(validation_result)
+
+        st.subheader("Reporte y exportación")
+        if st.session_state.results:
+            _, report_result = active_result_selector("report")
+            if report_result is not None:
+                kr, _ = representative_time_index(report_result)
+                quick = st.columns(6)
+                quick[0].metric("Tout", f"{report_result.Tout_C[kr]:.2f} °C")
+                quick[1].metric("η HTF", f"{report_result.scalar_diag['eta_pct'][kr]:.2f} %")
+                quick[2].metric("Q útil", f"{report_result.scalar_diag['Quseful_W'][kr]:.1f} W")
+                quick[3].metric("Q pérdidas", f"{report_result.scalar_diag['Qloss_W'][kr]:.1f} W")
+                quick[4].metric("Tabs", f"{report_result.Tabs_mean_C[kr]:.2f} °C")
+                quick[5].metric("Tvid", f"{report_result.Tglass_mean_C[kr]:.2f} °C")
+
+        st.markdown("#### Indicadores de error · última validación fuera de muestra")
+        if validation_metrics:
+            em = st.columns(6)
+            em[0].metric("Score relativo", f"{validation_metrics.get('holdout_score_pct', float('nan')):.2f} %")
+            em[1].metric("RMSE η", f"{validation_metrics.get('eta_rmse', float('nan')):.2f} pp")
+            em[2].metric("MAE η", f"{validation_metrics.get('eta_mae', float('nan')):.2f} pp")
+            em[3].metric("MAPE η", f"{validation_metrics.get('eta_mape_pct', float('nan')):.2f} %")
+            em[4].metric("RMSE Tout", f"{validation_metrics.get('tout_rmse', float('nan')):.2f} °C")
+            em[5].metric("Máx. error rel. η", f"{validation_metrics.get('eta_max_rel_pct', float('nan')):.2f} %")
+        else:
+            st.info("Ejecute la sección Validación para incorporar RMSE, MAE, MAPE y errores relativos al reporte.")
+
+        report_lines = [report_text]
+        if validation_metrics:
+            report_lines.extend([
+                "",
+                "=== VALIDACION FUERA DE MUESTRA ===",
+                f"Caso: {validation_result.get('case', '—')}",
+                f"Score relativo hold-out: {validation_metrics.get('holdout_score_pct', float('nan')):.4f} %",
+                f"RMSE eta: {validation_metrics.get('eta_rmse', float('nan')):.4f} pp",
+                f"MAE eta: {validation_metrics.get('eta_mae', float('nan')):.4f} pp",
+                f"MAPE eta: {validation_metrics.get('eta_mape_pct', float('nan')):.4f} %",
+                f"Bias eta: {validation_metrics.get('eta_bias', float('nan')):.4f} pp",
+                f"RMSE Tout: {validation_metrics.get('tout_rmse', float('nan')):.4f} °C",
+                f"MAPE Tout: {validation_metrics.get('tout_mape_pct', float('nan')):.4f} %",
+            ])
+        report_text_with_validation = "\n".join(report_lines)
+        with st.expander("Ver reporte técnico", expanded=False):
+            st.code(report_text_with_validation, language="text")
+
+        project_payload = {"config": json_ready(cfg), "fluid_database": json_ready(fluid_db)}
+        project_json = json.dumps(project_payload, indent=2, ensure_ascii=False).encode("utf-8")
+        export_cols = st.columns(3)
+        export_cols[0].download_button(
+            "Descargar reporte TXT",
+            data=report_text_with_validation.encode("utf-8"),
+            file_name="reporte_tecnico_ptc.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+        export_cols[1].download_button(
+            "Guardar proyecto JSON",
+            data=project_json,
+            file_name="proyecto_ptc.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+        if st.session_state.results:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                for index, (scenario, scenario_result) in enumerate(st.session_state.results.items(), start=1):
+                    scenario_result.scalar_dataframe().to_excel(writer, sheet_name=f"Escenario_{index}", index=False)
+                    scenario_result.node_dataframe(len(scenario_result.t_s) - 1).to_excel(writer, sheet_name=f"Nodos_final_{index}", index=False)
+                if validation_metrics:
+                    pd.DataFrame([validation_metrics]).to_excel(writer, sheet_name="Errores_validacion", index=False)
+                    if not comparison.empty:
+                        comparison.to_excel(writer, sheet_name="Detalle_validacion", index=False)
+                    if isinstance(validation_result, dict) and isinstance(validation_result.get("parameter_table"), pd.DataFrame):
+                        validation_result["parameter_table"].to_excel(writer, sheet_name="Parametros_calibrados", index=False)
+            export_cols[2].download_button(
+                "Exportar resultados XLSX",
+                data=buffer.getvalue(),
+                file_name="resultados_ptc.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        else:
+            export_cols[2].info("Ejecute una simulación para habilitar XLSX.")
+
+elif main_section == "Propiedades":
     st.subheader("Irradiación diaria del modelo")
     st.caption(
         "Diagnóstico de 00:00 a 24:00 LAT calculado directamente con el modelo de irradiación seleccionado. "
@@ -1089,396 +1278,208 @@ with tab_props:
     cfg["solar"]["profile"] = {column: profile_edited[column].tolist() for column in profile_edited.columns}
     st.caption("Este perfil se usa cuando el modo de irradiación es Perfil horario editable.")
 
-with tab_validation:
-    st.subheader("Validación documental")
+
+elif main_section == "Validación":
+    st.subheader("Validación del modelo")
     st.write(
-        "Los presets separan los valores publicados de las hipótesis que nuestra formulación necesita y la fuente no informa. "
-        "La comparación del preset activo utiliza exactamente la configuración que está viendo/editando en el sidebar."
+        "La validación se separa de la calibración. Primero se identifican parámetros usando solamente una muestra documental; "
+        "después esos parámetros quedan congelados y se prueban contra datos que no participaron del ajuste."
     )
 
-    meta = cfg.get("preset_meta", {})
-    if meta:
-        source_cols = st.columns(4)
-        source_cols[0].metric("Preset activo", str(meta.get("family", "—")))
-        source_cols[1].metric("Ciudad", str(meta.get("city", "—")))
-        source_cols[2].metric("Referencia", str(meta.get("reference_table", "—")))
-        source_cols[3].metric("Caso", str(meta.get("date_label", "—")))
-        if meta.get("assumptions"):
-            with st.expander("Supuestos del preset que afectan la comparación", expanded=False):
-                for item in meta["assumptions"]:
-                    st.markdown(f"- {item}")
+    workflow_cols = st.columns([1.45, 1.0, 1.0])
+    validation_case_labels = {
+        "Rea Quille · Foz do Iguaçu · 12 meses": "rea_foz",
+        "Rea Quille · Alvorada do Norte · 12 meses": "rea_alvorada",
+    }
+    validation_case_label = workflow_cols[0].selectbox(
+        "Conjunto para calibración + validación",
+        list(validation_case_labels.keys()),
+        key="validation_case_selector_v14",
+    )
+    validation_case = validation_case_labels[validation_case_label]
+    workflow_cols[1].metric("Muestra de calibración", "4 meses")
+    workflow_cols[2].metric("Hold-out", "8 meses")
+    st.caption(
+        "Calibración: enero, abril, julio y octubre. Validación fuera de muestra: los ocho meses restantes. "
+        "Los meses de hold-out nunca entran en la función objetivo del optimizador."
+    )
 
-    val_cols = st.columns(4)
-    if val_cols[0].button("Validar preset activo", type="primary", use_container_width=True):
-        try:
-            with st.spinner("Ejecutando el preset activo contra su referencia"):
-                st.session_state.validations["active_preset"] = validate_active_preset(cfg, fluid_db)
-        except Exception as exc:
-            st.exception(exc)
-    if val_cols[1].button("12 meses · Foz", use_container_width=True):
-        try:
-            with st.spinner("Ejecutando los 12 presets mensuales de Foz do Iguaçu"):
-                st.session_state.validations["rea_foz"] = validate_rea_quille_city_monthly("Foz do Iguaçu", fluid_db)
-        except Exception as exc:
-            st.exception(exc)
-    if val_cols[2].button("12 meses · Alvorada", use_container_width=True):
-        try:
-            with st.spinner("Ejecutando los 12 presets mensuales de Alvorada do Norte"):
-                st.session_state.validations["rea_alvorada"] = validate_rea_quille_city_monthly("Alvorada do Norte", fluid_db)
-        except Exception as exc:
-            st.exception(exc)
-    if val_cols[3].button("Tabla 8 · Experimental/TRNSYS", use_container_width=True):
-        st.session_state.validations["prototype_table"] = prototype_tcc_table()
+    registry = inverse_parameter_options(validation_case, fluid_db)
+    label_to_id = {spec["label"]: pid for pid, spec in registry.items()}
+    default_ids = ["eta_opt_eff", "wind_m_s"]
+    default_labels = [registry[pid]["label"] for pid in default_ids if pid in registry]
+    selected_labels = st.multiselect(
+        "Parámetros a calibrar",
+        list(label_to_id.keys()),
+        default=default_labels,
+        key=f"validation_parameters_{validation_case}",
+        help="Seleccione solamente parámetros inciertos. Los valores publicados deberían permanecer fijos.",
+    )
+    selected_ids = [label_to_id[label] for label in selected_labels]
 
-    if st.button(
-        "Comparar RK45 · Radau · BDF — Bhambare/Sukhatme",
+    if selected_ids:
+        preview = pd.DataFrame([
+            {
+                "Parámetro": registry[pid]["label"],
+                "Nominal": registry[pid]["nominal"],
+                "Límite inferior": registry[pid]["bounds"][0],
+                "Límite superior": registry[pid]["bounds"][1],
+                "Estado": registry[pid]["status"],
+            }
+            for pid in selected_ids
+        ])
+        with st.expander("Parámetros que entrarán en la calibración", expanded=False):
+            st.dataframe(preview, use_container_width=True, hide_index=True)
+
+    controls = st.columns([1.0, 1.35])
+    max_nfev = controls[0].slider(
+        "Máx. evaluaciones",
+        min_value=8,
+        max_value=60,
+        value=18,
+        step=2,
+        key=f"validation_nfev_{validation_case}",
+    )
+    run_validation = controls[1].button(
+        "Calibrar con 4 meses y validar en 8 no usados",
+        type="primary",
         use_container_width=True,
-        help=(
-            "Ejecuta el mismo preset Bhambare/Sukhatme tres veces, cambiando solamente el integrador temporal. "
-            "Permite separar el efecto del solver de la discrepancia física con la referencia."
-        ),
-    ):
+        disabled=not selected_ids,
+        key="run_calibration_holdout_v14",
+    )
+    if run_validation:
         try:
-            with st.spinner("Ejecutando Bhambare/Sukhatme con RK45, Radau y BDF. Puede tardar algunos segundos..."):
-                st.session_state.validations["bhambare_solvers"] = compare_bhambare_solvers(fluid_db)
+            with st.spinner("Calibrando la muestra y reejecutando automáticamente los ocho meses de hold-out..."):
+                st.session_state.validations["model_validation"] = calibrate_inverse_model(
+                    validation_case,
+                    fluid_db,
+                    selected_ids,
+                    monthly_strategy="alternating",
+                    max_nfev=max_nfev,
+                )
         except Exception as exc:
             st.exception(exc)
 
-    if "active_preset" in st.session_state.validations:
-        validation = st.session_state.validations["active_preset"]
+    validation_result = st.session_state.validations.get("model_validation")
+    if isinstance(validation_result, dict) and validation_result.get("case") == validation_case:
         st.divider()
-        st.subheader("Preset activo vs documento")
-        st.caption(validation["note"])
-        kind = validation.get("kind")
-        if kind == "prototype":
-            metrics = validation["metrics"]
-            mcols = st.columns(4)
-            mcols[0].metric("η exp. media", f"{metrics['Eta_exp_media_pct']:.2f} %")
-            mcols[1].metric("η TRNSYS media", f"{metrics['Eta_TRNSYS_media_pct']:.2f} %")
-            mcols[2].metric("η Python media", f"{metrics['Eta_Python_media_pct']:.2f} %")
-            mcols[3].metric("Bias Python-exp", f"{metrics['Bias_Python_vs_exp_pp']:+.2f} pp")
-            st.warning("La comparación Python del prototipo es exploratoria porque la Tabela 8 no publica Tin/Tout horarios. El valor de Tin mostrado en el preset es una hipótesis explícita y editable.")
-            st.dataframe(validation["table"], use_container_width=True, hide_index=True)
-        elif kind == "bhambare":
-            st.dataframe(validation["table"], use_container_width=True, hide_index=True)
-            st.plotly_chart(validation_bhambare_figure(validation["table"]), use_container_width=True)
+        st.markdown("#### Resultado: calibración → validación fuera de muestra")
+        summary = calibration_error_summary(validation_result)
+        top = st.columns(6)
+        top[0].metric("Score muestra · antes", f"{validation_result['score_before_pct']:.2f} %")
+        top[1].metric("Score muestra · calibrado", f"{validation_result['score_after_pct']:.2f} %")
+        top[2].metric("Score hold-out", f"{summary.get('holdout_score_pct', float('nan')):.2f} %")
+        top[3].metric("RMSE η hold-out", f"{summary.get('eta_rmse', float('nan')):.2f} pp")
+        top[4].metric("MAPE η hold-out", f"{summary.get('eta_mape_pct', float('nan')):.2f} %")
+        top[5].metric("RMSE Tout hold-out", f"{summary.get('tout_rmse', float('nan')):.2f} °C")
+
+        if validation_result.get("success") and validation_result.get("physically_admissible"):
+            st.success("La calibración terminó dentro de los límites físicos impuestos; los indicadores anteriores corresponden a datos no usados en el ajuste.")
         else:
-            st.dataframe(validation["table"], use_container_width=True, hide_index=True)
+            st.warning(f"La calibración terminó con advertencias: {validation_result.get('message', '—')}")
+        if not validation_result.get("locally_identifiable", True):
+            st.warning("El Jacobiano indica identificabilidad débil: varios conjuntos de parámetros pueden producir respuestas parecidas.")
 
-    if "bhambare_solvers" in st.session_state.validations:
-        comparison = st.session_state.validations["bhambare_solvers"]
-        st.divider()
-        st.subheader("Bhambare/Sukhatme — sensibilidad al solver")
-        st.caption(comparison["note"])
+        comparison = validation_comparison_table(validation_result)
+        holdout_table = comparison.loc[comparison["Conjunto"] == "validación"].copy() if not comparison.empty else pd.DataFrame()
+        if not holdout_table.empty:
+            st.markdown("**Datos no usados durante la calibración**")
+            st.dataframe(holdout_table, use_container_width=True, hide_index=True)
+            eta_hold = holdout_table.loc[holdout_table["Magnitud"] == "Eta_pct"].copy()
+            if not eta_hold.empty:
+                improved = eta_hold.loc[eta_hold["Error_calibrado_pct"].abs() < eta_hold["Error_inicial_pct"].abs()]
+                worsened = eta_hold.loc[eta_hold["Error_calibrado_pct"].abs() > eta_hold["Error_inicial_pct"].abs()]
+                g = st.columns(3)
+                g[0].metric("Meses mejorados", f"{len(improved)}/{len(eta_hold)}")
+                g[1].metric("Meses que empeoran", f"{len(worsened)}/{len(eta_hold)}")
+                g[2].metric("Generalización", "Consistente" if len(worsened) == 0 else "Mixta")
+                if len(worsened):
+                    details = ", ".join(
+                        f"{row.Caso}: {abs(row.Error_inicial_pct):.2f}% → {abs(row.Error_calibrado_pct):.2f}%"
+                        for row in worsened.itertuples()
+                    )
+                    st.warning(
+                        "El error global puede disminuir aunque algunos meses empeoren, porque el optimizador minimiza una función conjunta. "
+                        f"Meses con pérdida de precisión: {details}."
+                    )
 
-        spreads = comparison["spreads"]
-        spread_cols = st.columns(5)
-        spread_cols[0].metric("Δ Tout entre solvers", f"{spreads['Tout_span_C']:.6f} °C")
-        spread_cols[1].metric("Δ Tabs entre solvers", f"{spreads['Tabs_span_K']:.6f} K")
-        spread_cols[2].metric("Δ Q pérdidas", f"{spreads['Qloss_span_W']:.6f} W")
-        spread_cols[3].metric("Δ η", f"{spreads['eta_span_pp']:.6f} pp")
-        spread_cols[4].metric("Máx. dispersión relativa", f"{spreads['max_solver_relative_spread_pct']:.6f} %")
-
-        st.markdown("**Comparación final con las referencias**")
-        st.dataframe(comparison["comparison_table"], use_container_width=True, hide_index=True)
-
-        st.markdown("**Resultados por solver y error frente a Sukhatme**")
-        st.dataframe(comparison["solver_table"], use_container_width=True, hide_index=True)
-
-        st.plotly_chart(
-            bhambare_solver_comparison_figure(comparison["results"]),
+        st.markdown("**Parámetros calibrados**")
+        st.dataframe(validation_result["parameter_table"], use_container_width=True, hide_index=True)
+        action = st.columns(2)
+        if action[0].button(
+            "Usar parámetros calibrados en el simulador",
+            type="primary",
+            use_container_width=True,
+            key="apply_latest_calibration_v14",
+        ):
+            try:
+                apply_calibrated_parameters(st.session_state.config, st.session_state.fluid_database, validation_result)
+                st.session_state.results = {}
+                st.session_state.result_signature = None
+                st.session_state.ui_revision += 1
+                st.success("Parámetros calibrados aplicados al proyecto activo.")
+                st.rerun()
+            except Exception as exc:
+                st.exception(exc)
+        export_validation = io.BytesIO()
+        with pd.ExcelWriter(export_validation, engine="openpyxl") as writer:
+            validation_result["parameter_table"].to_excel(writer, sheet_name="Parametros_calibrados", index=False)
+            comparison.to_excel(writer, sheet_name="Calibracion_y_holdout", index=False)
+            pd.DataFrame([summary]).to_excel(writer, sheet_name="Indicadores_holdout", index=False)
+        action[1].download_button(
+            "Exportar calibración + validación",
+            data=export_validation.getvalue(),
+            file_name=f"validacion_holdout_{validation_case}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
 
-        st.markdown("**Costo numérico y residuo al final de la simulación**")
-        st.dataframe(comparison["performance_table"], use_container_width=True, hide_index=True)
+    st.divider()
+    with st.expander("Benchmarks documentales · diagnóstico adicional", expanded=False):
         st.caption(
-            "max|dT/dt| final se calcula considerando HTF, absorbedor y vidrio en todos los nodos. "
-            "Un valor menor indica que la solución está más próxima al estado estacionario al terminar el intervalo."
+            "Estos benchmarks sirven para auditar el modelo contra literatura, pero no sustituyen la validación fuera de muestra. "
+            "Bhambare/Sukhatme es un único caso; Fiamonzini Tabela 8 carece de varias entradas horarias experimentales."
         )
-
-        csv_solver = comparison["solver_table"].to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Descargar comparación de solvers · CSV",
-            data=csv_solver,
-            file_name="bhambare_sukhatme_comparacion_solvers.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    st.divider()
-    st.subheader("Bhambare / Sukhatme — validación por objetivo")
-    st.write(
-        "Permite cuantificar los errores del caso Bhambare con el mismo criterio explícito usado en Rea Quille. "
-        "Como Tout, Tabs, Tvid y Q pérdidas tienen unidades distintas, las métricas globales usan residuos relativos normalizados."
-    )
-    bh_target_labels = {
-        "sukhatme": "Sukhatme & Nayak · referencia",
-        "bhambare": "Bhambare · modelo publicado",
-        "xlsx_initial": "Template XLSX · modelo inicial",
-        "xlsx_identified": "Template XLSX · modelo identificado",
-    }
-    bhc = st.columns([1.25, 1.15, 1.0])
-    bh_target = bhc[0].selectbox(
-        "Curva / vector objetivo",
-        list(bh_target_labels.keys()),
-        format_func=lambda key: bh_target_labels[key],
-        key="bhambare_validation_target_ui",
-    )
-    if bh_target == "xlsx_identified":
-        bh_parameter_template = "identified"
-        bh_spec = identified_parameter_template("bhambare")
-        bhc[1].metric("Parámetros", "Identificados")
-        bhc[1].caption(
-            f"ηopt,ef={bh_spec['eta_opt_eff']:.4f} · εabs={bh_spec['eps_abs']:.3f} · εvid={bh_spec['eps_glass']:.3f}"
-        )
-    else:
-        bh_parameter_template = bhc[1].selectbox(
-            "Parámetros del modelo",
-            ["nominal", "identified"],
-            format_func=lambda key: "Nominales" if key == "nominal" else "Identificados 14/09",
-            key="bhambare_parameter_template_ui",
-            help=(
-                "El template identificado proviene de ptc_modelo_inverso_bhambare.xlsx. "
-                "η óptica efectiva, εabs y εvid quedaron muy cerca de sus límites superiores."
-            ),
-        )
-    bhc[2].metric(
-        "Comparación",
-        "4 magnitudes",
-        help="Tout, temperatura del absorbedor, temperatura del vidrio y pérdidas térmicas.",
-    )
-
-    bh_actions = st.columns(2)
-    if bh_actions[0].button(
-        "Ejecutar validación Bhambare",
-        type="primary",
-        use_container_width=True,
-        key="run_bhambare_target_validation",
-    ):
-        try:
-            with st.spinner("Ejecutando Bhambare y calculando errores multivariables..."):
-                st.session_state.validations["bhambare_mode_validation"] = validate_bhambare_mode(
-                    fluid_db,
-                    target_key=bh_target,
-                    parameter_template=bh_parameter_template,
+        bench_cols = st.columns(2)
+        if bench_cols[0].button("Bhambare vs Sukhatme", use_container_width=True, key="compact_bhambare_v14"):
+            try:
+                st.session_state.validations["compact_bhambare"] = validate_bhambare_mode(
+                    fluid_db, target_key="sukhatme", parameter_template="nominal"
                 )
-        except Exception as exc:
-            st.exception(exc)
-
-    if bh_actions[1].button(
-        "Aplicar estos parámetros al simulador",
-        use_container_width=True,
-        key="apply_bhambare_template_to_simulator",
-    ):
-        apply_reference_preset("bhambare")
-        if bh_parameter_template == "identified":
-            apply_identified_parameter_template(st.session_state.config, "bhambare")
-        st.session_state["_pending_widget_state"] = {
-            "preset_family_selector": "bhambare",
-        }
-        st.rerun()
-
-    bh_template = bhambare_user_inverse_template()
-    with st.expander("Template XLSX incorporado · modelo inverso Bhambare 14/09/2026", expanded=False):
-        st.caption(bh_template["note"])
-        st.markdown("**Parámetros**")
-        st.dataframe(bh_template["parameter_table"], use_container_width=True, hide_index=True)
-        st.markdown("**Salidas guardadas**")
-        st.dataframe(bh_template["comparison_table"], use_container_width=True, hide_index=True)
-
-    if "bhambare_mode_validation" in st.session_state.validations:
-        bv = st.session_state.validations["bhambare_mode_validation"]
-        bm = bv["metrics"]
-        st.markdown(f"#### {bv['target_label']} · parámetros {bv['parameter_template']}")
-        bmc = st.columns(4)
-        bmc[0].metric("MAPE multivariable", f"{bm['MAPE_multivariable_pct']:.3f} %")
-        bmc[1].metric("RMS error relativo", f"{bm['RMSRE_pct']:.3f} %")
-        bmc[2].metric("Bias relativo medio", f"{bm['Bias_rel_medio_pct']:+.3f} %")
-        bmc[3].metric("Error máximo", f"{bm['Error_max_pct']:.3f} %")
-        # ``applied_parameters`` es None cuando se ejecuta con parámetros nominales.
-        # No encadenar .get() directamente sobre ese valor opcional.
-        bh_applied_parameters = bv.get("applied_parameters") or {}
-        if bh_applied_parameters.get("near_bounds"):
-            st.warning(
-                "Los parámetros identificados utilizados en esta corrida están próximos al límite superior del espacio de búsqueda. "
-                "Una reducción del error no implica que esos valores sean necesariamente propiedades físicas reales."
-            )
-        st.caption(bv["note"])
-        st.dataframe(bv["table"], use_container_width=True, hide_index=True)
-        st.download_button(
-            "Descargar validación Bhambare · CSV",
-            data=bv["table"].to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"bhambare_{bv['target_key']}_{bv['parameter_template']}.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="download_bhambare_mode_validation",
-        )
-
-    for key, title in (("rea_foz", "Rea Quille — Foz do Iguaçu — Tabela 10"), ("rea_alvorada", "Rea Quille — Alvorada do Norte — Tabela 11")):
-        if key in st.session_state.validations:
-            validation = st.session_state.validations[key]
-            st.divider()
-            st.subheader(title)
-            metrics = validation["metrics"]
-            metric_cols = st.columns(4)
-            metric_cols[0].metric("MAPE Tout", f"{metrics['MAPE_Tout_pct']:.2f} %")
-            metric_cols[1].metric("MAPE Q útil", f"{metrics['MAPE_Qutil_pct']:.2f} %")
-            metric_cols[2].metric("MAPE η", f"{metrics['MAPE_eta_pct']:.2f} %")
-            metric_cols[3].metric("Bias η", f"{metrics['Bias_eta_pp']:+.2f} pp")
-            st.caption(validation["note"])
-            st.dataframe(validation["table"], use_container_width=True, hide_index=True)
-            st.plotly_chart(validation_tcc_figure(validation["table"]), use_container_width=True)
-
-    if "prototype_table" in st.session_state.validations:
-        validation = st.session_state.validations["prototype_table"]
-        st.divider()
-        st.subheader("Rea Quille / Fiamonzini — Tabela 8")
-        prototype_cols = st.columns(4)
-        prototype_cols[0].metric("η experimental media", f"{validation['eta_exp_mean_pct']:.2f} %")
-        prototype_cols[1].metric("η TRNSYS media", f"{validation['eta_trnsys_mean_pct']:.2f} %")
-        prototype_cols[2].metric("RMSE TRNSYS-exp", f"{validation['RMSE_pp']:.2f} pp")
-        prototype_cols[3].metric("MAPE TRNSYS-exp", f"{validation['MAPE_pct']:.2f} %")
-        st.caption(validation["note"])
-        st.dataframe(validation["table"], use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.subheader("Rea Quille / Fiamonzini — validación por modo")
-    st.write(
-        "Separa la reproducción del TRNSYS publicado de una exploración física sin tracking. "
-        "Además puede usar como objetivo las curvas exactas del CSV exportado el 14/09/2026."
-    )
-    proto_mode_labels = {
-        "trnsys_published": "TRNSYS publicado · DNI=905 / IAM=1",
-        "physical_fixed_ns": "Físico corregido · fijo N-S / IAM variable",
-    }
-    proto_target_labels = {
-        "experimental": "Tabela 8 · experimental",
-        "trnsys": "Tabela 8 · TRNSYS",
-        "csv_initial": "Template CSV · modelo inicial",
-        "csv_identified": "Template CSV · modelo identificado",
-    }
-    pc = st.columns([1.2, 1.2, 1.05, 1.15])
-    proto_mode = pc[0].selectbox(
-        "Modo de simulación",
-        list(proto_mode_labels.keys()),
-        format_func=lambda key: proto_mode_labels[key],
-        key="prototype_validation_mode_ui",
-    )
-    proto_target = pc[1].selectbox(
-        "Curva objetivo",
-        list(proto_target_labels.keys()),
-        format_func=lambda key: proto_target_labels[key],
-        key="prototype_target_template_ui",
-    )
-    proto_dni_source = "nominal"
-    if proto_mode == "physical_fixed_ns":
-        proto_dni_source = pc[2].selectbox(
-            "DNI del modo físico",
-            ["temporal_clear_sky_905", "nominal", "clear_sky"],
-            format_func=lambda key: {
-                "temporal_clear_sky_905": "Temporal · 905 al mediodía",
-                "nominal": "905 nominal",
-                "clear_sky": "Cielo claro libre",
-            }[key],
-            key="prototype_validation_dni_ui",
-        )
-    else:
-        pc[2].metric("DNI / IAM", "905 / 1")
-
-    if proto_target == "csv_identified":
-        proto_parameter_template = "identified"
-        spec = identified_parameter_template("rea_prototype")
-        pc[3].metric("Parámetros", "Identificados")
-        pc[3].caption(f"ηopt,ef={spec['eta_opt_eff']:.4f} · viento={spec['wind_m_s']:.2f} m/s")
-    else:
-        proto_parameter_template = pc[3].selectbox(
-            "Parámetros del modelo",
-            ["nominal", "identified"],
-            format_func=lambda key: "Nominales" if key == "nominal" else "Identificados 14/09",
-            key="prototype_parameter_template_ui",
-            help="Los parámetros identificados provienen del XLSX del modelo inverso y se aplican realmente a la simulación; no solo cambian la curva objetivo.",
-        )
-
-    action_cols = st.columns(2)
-    if action_cols[0].button(
-        "Ejecutar validación del modo",
-        type="primary",
-        use_container_width=True,
-        key="run_prototype_mode_validation",
-    ):
-        try:
-            with st.spinner("Ejecutando el prototipo y comparando hora a hora..."):
-                st.session_state.validations["prototype_mode_validation"] = validate_rea_prototype_mode(
-                    proto_mode,
-                    fluid_db,
-                    target_key=proto_target,
-                    dni_source=proto_dni_source,
-                    parameter_template=proto_parameter_template,
+            except Exception as exc:
+                st.exception(exc)
+        if bench_cols[1].button("Rea/Fiamonzini · Tabela 8", use_container_width=True, key="compact_rea_proto_v14"):
+            try:
+                st.session_state.validations["compact_prototype"] = validate_rea_prototype_mode(
+                    "trnsys_published", fluid_db, target_key="experimental", dni_source="nominal", parameter_template="nominal"
                 )
-        except Exception as exc:
-            st.exception(exc)
+            except Exception as exc:
+                st.exception(exc)
+        if "compact_bhambare" in st.session_state.validations:
+            bv = st.session_state.validations["compact_bhambare"]
+            bm = bv["metrics"]
+            c = st.columns(4)
+            c[0].metric("RMSRE", f"{bm['RMSRE_pct']:.2f} %")
+            c[1].metric("MAPE multivariable", f"{bm['MAPE_multivariable_pct']:.2f} %")
+            c[2].metric("Bias relativo", f"{bm['Bias_rel_medio_pct']:+.2f} %")
+            c[3].metric("Error máximo", f"{bm['Error_max_pct']:.2f} %")
+            st.dataframe(bv["table"], use_container_width=True, hide_index=True)
+        if "compact_prototype" in st.session_state.validations:
+            pv = st.session_state.validations["compact_prototype"]
+            pm = pv["metrics"]
+            c = st.columns(4)
+            c[0].metric("MAE η", f"{pm['MAE_pp']:.2f} pp")
+            c[1].metric("RMSE η", f"{pm['RMSE_pp']:.2f} pp")
+            c[2].metric("MAPE η", f"{pm['MAPE_pct']:.2f} %")
+            c[3].metric("η Python media", f"{pm['Eta_python_mean_pct']:.2f} %")
+            st.dataframe(pv["table"], use_container_width=True, hide_index=True)
 
-    if action_cols[1].button(
-        "Aplicar este modo al simulador",
-        use_container_width=True,
-        key="apply_prototype_mode_to_simulator",
-    ):
-        apply_reference_preset(
-            "rea_prototype", variant=proto_mode, dni_source=proto_dni_source
-        )
-        if proto_parameter_template == "identified":
-            apply_identified_parameter_template(st.session_state.config, "rea_prototype")
-        # No escribir directamente en las keys de widgets ya instanciados.
-        # Se aplican al comienzo del próximo rerun (initialize_state).
-        st.session_state["_pending_widget_state"] = {
-            "preset_family_selector": "rea_prototype",
-            "preset_prototype_mode_selector": proto_mode,
-            "preset_prototype_dni_source": proto_dni_source,
-        }
-        st.rerun()
-
-    template = prototype_user_export_template()
-    with st.expander("Template CSV incorporado · exportación 14/09/2026", expanded=False):
-        st.caption(template["note"])
-        st.dataframe(template["table"], use_container_width=True, hide_index=True)
-        st.download_button(
-            "Descargar template CSV incorporado",
-            data=template["table"].to_csv(index=False).encode("utf-8-sig"),
-            file_name="rea_fiamonzini_template_2026-09-14.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="download_builtin_rea_csv_template",
-        )
-
-    if "prototype_mode_validation" in st.session_state.validations:
-        pv = st.session_state.validations["prototype_mode_validation"]
-        pm = pv["metrics"]
-        st.markdown(f"#### {pv['mode_label']} → {pv['target_label']}")
-        mc = st.columns(5)
-        mc[0].metric("η objetivo media", f"{pm['Eta_target_mean_pct']:.2f} %")
-        mc[1].metric("η Python media", f"{pm['Eta_python_mean_pct']:.2f} %")
-        mc[2].metric("MAE", f"{pm['MAE_pp']:.2f} pp")
-        mc[3].metric("RMSE", f"{pm['RMSE_pp']:.2f} pp")
-        mc[4].metric("MAPE", f"{pm['MAPE_pct']:.2f} %")
-        st.caption(pv["note"])
-        st.dataframe(pv["table"], use_container_width=True, hide_index=True)
-        st.download_button(
-            "Descargar comparación del modo · CSV",
-            data=pv["table"].to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"rea_fiamonzini_{pv['mode']}_{pv['target_key']}.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="download_prototype_mode_validation",
-        )
-
-
-with tab_sensitivity:
-    st.subheader("Diagnóstico de sensibilidad y convergencia")
+elif main_section == "Sensibilidad":
+    st.subheader("Sensibilidad y convergencia")
     st.write(
-        "Este módulo separa dos preguntas distintas: (1) si la solución depende de la discretización o del integrador y "
-        "(2) qué parámetros físicos explican mejor la discrepancia con Sukhatme/Bhambare. "
-        "Se usa el caso Bhambare/Sukhatme porque es la referencia más completa y estricta disponible."
+        "El análisis de sensibilidad cuantifica cuánto cambian los resultados buscados cuando cambia un parámetro. "
+        "No calibra el modelo: perturba cada parámetro de forma controlada para identificar cuáles dominan Tout, Tabs, Tvid, Q pérdidas y eficiencia. "
+        "La convergencia numérica, por separado, verifica que la respuesta no dependa artificialmente de la malla, del paso temporal o de las tolerancias."
     )
 
     sens_cols = st.columns(2)
@@ -1575,229 +1576,3 @@ with tab_sensitivity:
             f"{top['Mejora_score_pp']:.2f} puntos. Esto identifica sensibilidad, no autoriza calibrar el parámetro fuera de su valor físico/documental."
         )
 
-    st.divider()
-    st.subheader("3 · Identificación multiparámetro (modelo inverso)")
-    st.write(
-        "Busca simultáneamente un conjunto de parámetros dentro de límites físicos y vuelve a ejecutar la validación. "
-        "Los factores ópticos correlacionados se agrupan como η óptica efectiva para evitar atribuir a ρ, γ, τ o α una unicidad que los datos no permiten demostrar."
-    )
-
-    inverse_case_labels = {
-        "Bhambare / Sukhatme — Table 4": "bhambare",
-        "Rea Quille — Foz do Iguaçu — Tabela 10": "rea_foz",
-        "Rea Quille — Alvorada do Norte — Tabela 11": "rea_alvorada",
-        "Rea Quille / Fiamonzini — prototipo — Tabela 8 (exploratorio)": "rea_prototype",
-    }
-    inverse_case_label = st.selectbox(
-        "Conjunto documental",
-        list(inverse_case_labels.keys()),
-        key="inverse_case_selector",
-    )
-    inverse_case = inverse_case_labels[inverse_case_label]
-    registry = inverse_parameter_options(inverse_case, fluid_db)
-    label_to_id = {spec["label"]: pid for pid, spec in registry.items()}
-
-    default_ids_by_case = {
-        "bhambare": ["eta_opt_eff", "eps_abs", "eps_glass"],
-        "rea_foz": ["eta_opt_eff", "wind_m_s"],
-        "rea_alvorada": ["eta_opt_eff", "wind_m_s"],
-        "rea_prototype": ["eta_opt_eff", "wind_m_s"],
-    }
-    default_labels = [registry[pid]["label"] for pid in default_ids_by_case[inverse_case] if pid in registry]
-    selected_labels = st.multiselect(
-        "Parámetros a identificar",
-        list(label_to_id.keys()),
-        default=default_labels,
-        key=f"inverse_parameters_{inverse_case}",
-        help="Use pocos parámetros y priorice los inciertos. Parámetros publicados deberían permanecer fijos salvo que el objetivo sea una prueba explícita de sensibilidad.",
-    )
-    selected_ids = [label_to_id[label] for label in selected_labels]
-
-    parameter_preview = pd.DataFrame(
-        [
-            {
-                "Parametro": registry[pid]["label"],
-                "Nominal": registry[pid]["nominal"],
-                "Limite_inf": registry[pid]["bounds"][0],
-                "Limite_sup": registry[pid]["bounds"][1],
-                "Observacion": registry[pid]["status"],
-            }
-            for pid in selected_ids
-        ]
-    )
-    if not parameter_preview.empty:
-        st.dataframe(parameter_preview, use_container_width=True, hide_index=True)
-
-    inv_controls = st.columns([1.35, 1.0, 1.0])
-    monthly_strategy = "alternating"
-    if inverse_case in {"rea_foz", "rea_alvorada"}:
-        strategy_label = inv_controls[0].selectbox(
-            "Estrategia de calibración",
-            [
-                "4 meses calibración + 8 meses hold-out",
-                "Usar los 12 meses para calibrar",
-            ],
-            key=f"inverse_strategy_{inverse_case}",
-        )
-        monthly_strategy = "alternating" if strategy_label.startswith("4 meses") else "all"
-    else:
-        inv_controls[0].caption(
-            "Bhambare no tiene un segundo caso independiente; Tabela 8 es exploratoria porque Tin horario no fue publicado."
-            if inverse_case in {"bhambare", "rea_prototype"}
-            else ""
-        )
-
-    max_nfev = inv_controls[1].slider(
-        "Máx. evaluaciones",
-        min_value=8,
-        max_value=60,
-        value=16,
-        step=2,
-        key=f"inverse_nfev_{inverse_case}",
-    )
-    inv_controls[2].metric("Parámetros libres", len(selected_ids))
-
-    if st.button(
-        "Ejecutar identificación multiparámetro",
-        type="primary",
-        use_container_width=True,
-        disabled=(len(selected_ids) == 0),
-        key="run_inverse_calibration",
-    ):
-        try:
-            with st.spinner(
-                "Resolviendo el problema inverso con límites físicos y reejecutando la validación. "
-                "Los casos mensuales pueden tardar más porque cada evaluación ejecuta varios meses..."
-            ):
-                st.session_state.validations["inverse_calibration"] = calibrate_inverse_model(
-                    inverse_case,
-                    fluid_db,
-                    selected_ids,
-                    monthly_strategy=monthly_strategy,
-                    max_nfev=max_nfev,
-                )
-        except Exception as exc:
-            st.exception(exc)
-
-    if "inverse_calibration" in st.session_state.validations and st.session_state.validations["inverse_calibration"].get("case") == inverse_case:
-        inv = st.session_state.validations["inverse_calibration"]
-        st.markdown("#### Resultado del modelo inverso")
-        m = st.columns(6)
-        m[0].metric("Score inicial", f"{inv['score_before_pct']:.2f} %")
-        m[1].metric("Score identificado", f"{inv['score_after_pct']:.2f} %", delta=f"{-inv['improvement_pp']:.2f} pp")
-        m[2].metric("Evaluaciones", str(inv["nfev"]))
-        m[3].metric("Tiempo", f"{inv['cpu_s']:.1f} s")
-        m[4].metric("Rango Jacobiano", f"{inv['jacobian_rank']}/{inv['n_parameters']}")
-        cond = inv["condition_number"]
-        m[5].metric("Condición J", f"{cond:.2e}" if np.isfinite(cond) else "∞")
-
-        if inv["success"] and inv["physically_admissible"]:
-            st.success("El optimizador terminó dentro de los límites físicos impuestos.")
-        else:
-            st.warning(f"El ajuste no terminó de forma plenamente satisfactoria: {inv['message']}")
-        if not inv["locally_identifiable"]:
-            st.warning(
-                "La identificación local es débil: el Jacobiano tiene rango insuficiente o está mal condicionado. "
-                "El ajuste puede reproducir los datos sin que los valores individuales de los parámetros sean únicos."
-            )
-
-        st.markdown("**Parámetros identificados**")
-        st.dataframe(inv["parameter_table"], use_container_width=True, hide_index=True)
-
-        before = inv["predictions_before"].copy().rename(
-            columns={"Modelo": "Modelo_inicial", "Error_rel_pct": "Error_inicial_pct", "Residual_obj": "Residual_inicial"}
-        )
-        after = inv["predictions_after"].copy().rename(
-            columns={"Modelo": "Modelo_identificado", "Error_rel_pct": "Error_identificado_pct", "Residual_obj": "Residual_identificado"}
-        )
-        keys = ["Conjunto", "Caso", "Magnitud", "Referencia"]
-        comparison = before.merge(after, on=keys, how="outer")
-        st.markdown("**Reejecución de las referencias con los parámetros encontrados**")
-        st.dataframe(comparison, use_container_width=True, hide_index=True)
-
-        holdout = inv.get("validation_summary", {})
-        if holdout:
-            h = st.columns(2)
-            h[0].metric("Hold-out antes", f"{holdout['holdout_score_before_pct']:.2f} %")
-            h[1].metric(
-                "Hold-out después",
-                f"{holdout['holdout_score_after_pct']:.2f} %",
-                delta=f"{holdout['holdout_score_after_pct'] - holdout['holdout_score_before_pct']:+.2f} pp",
-                delta_color="inverse",
-            )
-
-        if inverse_case in {"rea_foz", "rea_alvorada"}:
-            eta_hold = comparison[(comparison["Conjunto"] == "validación") & (comparison["Magnitud"] == "Eta_pct")].copy()
-            if not eta_hold.empty:
-                improved = eta_hold[eta_hold["Error_identificado_pct"].abs() < eta_hold["Error_inicial_pct"].abs()]
-                worsened = eta_hold[eta_hold["Error_identificado_pct"].abs() > eta_hold["Error_inicial_pct"].abs()]
-                gc = st.columns(3)
-                gc[0].metric("Meses hold-out mejorados", f"{len(improved)}/{len(eta_hold)}")
-                gc[1].metric("Meses que empeoran", f"{len(worsened)}/{len(eta_hold)}")
-                gc[2].metric("Generalización", "Mixta" if len(worsened) else "Consistente")
-                if len(worsened):
-                    details = ", ".join(
-                        f"{row.Caso}: {abs(row.Error_inicial_pct):.2f}% → {abs(row.Error_identificado_pct):.2f}%"
-                        for row in worsened.itertuples()
-                    )
-                    st.warning(
-                        "El ajuste reduce el error global, pero no mejora todos los meses de validación. "
-                        f"Empeoran: {details}. Esto es señal de parámetros efectivos no estacionarios, entradas mensuales incompletas o compensación entre parámetros; no invalida el modelo inverso, pero impide tratar el conjunto identificado como una constante universal."
-                    )
-
-        for note in inv["notes"]:
-            st.caption(note)
-
-        export_inverse = io.BytesIO()
-        with pd.ExcelWriter(export_inverse, engine="openpyxl") as writer:
-            inv["parameter_table"].to_excel(writer, sheet_name="Parametros", index=False)
-            comparison.to_excel(writer, sheet_name="Comparacion", index=False)
-        st.download_button(
-            "Descargar identificación multiparámetro · XLSX",
-            data=export_inverse.getvalue(),
-            file_name=f"ptc_modelo_inverso_{inv['case']}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-
-with tab_report:
-    report_text = build_technical_report(cfg)
-    st.subheader("Reporte técnico en texto plano")
-    st.code(report_text, language="text")
-    project_payload = {
-        "config": json_ready(cfg),
-        "fluid_database": json_ready(fluid_db),
-    }
-    project_json = json.dumps(project_payload, indent=2, ensure_ascii=False).encode("utf-8")
-    export_cols = st.columns(3)
-    export_cols[0].download_button(
-        "Descargar reporte TXT",
-        data=report_text.encode("utf-8"),
-        file_name="reporte_tecnico_ptc.txt",
-        mime="text/plain",
-        use_container_width=True,
-    )
-    export_cols[1].download_button(
-        "Guardar proyecto JSON",
-        data=project_json,
-        file_name="proyecto_ptc.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-    if st.session_state.results:
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            for index, (scenario, scenario_result) in enumerate(st.session_state.results.items(), start=1):
-                scenario_result.scalar_dataframe().to_excel(writer, sheet_name=f"Escenario_{index}", index=False)
-                scenario_result.node_dataframe(len(scenario_result.t_s) - 1).to_excel(
-                    writer, sheet_name=f"Nodos_final_{index}", index=False
-                )
-        export_cols[2].download_button(
-            "Exportar resultados XLSX",
-            data=buffer.getvalue(),
-            file_name="resultados_ptc.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-    else:
-        export_cols[2].info("Ejecute una simulación para habilitar XLSX.")

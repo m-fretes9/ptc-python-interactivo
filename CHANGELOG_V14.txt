@@ -1,0 +1,38 @@
+PTC Python Interactivo — V14
+============================
+
+Reorganización mayor de interfaz y flujo de validación.
+
+1. Navegación principal reducida a 4 secciones:
+   - Simulación
+   - Propiedades
+   - Validación
+   - Sensibilidad
+
+2. Simulación
+   - Botón "Ejecutar simulación" movido al encabezado superior derecho.
+   - Eliminada la comparación rápida con la referencia del preset.
+   - Si la fuente solar absorbida es constante, no se muestra el dashboard transitorio; se presentan directamente estado representativo/perfiles axiales y, para barridos, una tabla comparativa estacionaria.
+   - Reporte y exportación pasan a ser una subpestaña de Simulación.
+
+3. Propiedades
+   - Irradiación, cielo, perfil horario y propiedades del HTF quedan en una sección propia.
+
+4. Validación
+   - Flujo principal cambiado a calibración + hold-out.
+   - Enero, abril, julio y octubre calibran parámetros.
+   - Los otros 8 meses quedan completamente fuera del ajuste y se usan para validación.
+   - Botón para aplicar al simulador los parámetros recién calibrados.
+   - Métricas hold-out: score relativo, RMSE/MAE/MAPE/bias y error relativo máximo.
+   - Benchmarks Bhambare/Sukhatme y Rea/Fiamonzini quedan como diagnóstico documental secundario, no como validación fuera de muestra.
+
+5. Sensibilidad
+   - Se conserva convergencia numérica y sensibilidad física local.
+   - Se retira el modelo inverso de esta sección.
+   - Texto corregido: sensibilidad = cuánto cambian las salidas al perturbar parámetros; no es calibración.
+
+6. Reporte y exportación
+   - Añadidos indicadores de error de la última validación hold-out.
+   - El XLSX agrega hojas Errores_validacion, Detalle_validacion y Parametros_calibrados cuando están disponibles.
+
+Pruebas: 15/15 tests automáticos aprobados.

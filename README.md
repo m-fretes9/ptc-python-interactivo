@@ -74,41 +74,14 @@ Desde VSCode también puede abrir **Run and Debug** y seleccionar **Ejecutar int
 
 ## 4. Flujo de uso
 
-1. Ajuste geometría, operación, ambiente, óptica y solver en la barra lateral.
-2. Seleccione el modelo de irradiación:
-   - **Parishwad / cielo claro**;
-   - **DNI y ángulo constantes**;
-   - **Perfil horario editable**.
-3. En **Propiedades e irradiación** puede comparar el modelo solar seleccionado con:
-   - histograma horario del DNI medio;
-   - curva DNI·cos(theta) sobre la apertura;
-   - tarjeta de horas de sol del modelo (DNI > 1 W/m²);
-   - DNI máximo, energía DNI diaria y ventana solar LAT.
-   En la misma pestaña puede editar la base del fluido mediante correlación original, tabla completa interpolada con PCHIP o propiedades constantes.
-4. Pulse **Ejecutar simulación**.
-5. En **Nodo por nodo**, seleccione el tiempo y el volumen de control. La aplicación muestra:
-   - temperaturas locales;
-   - derivadas `dT/dt`;
-   - Reynolds, Prandtl, Nusselt y coeficientes convectivos;
-   - esquema geométrico del PTC;
-   - red térmica y resistencias efectivas;
-   - flujos de energía que entran y salen del nodo;
-   - tabla axial completa.
+La interfaz V14 se organiza en cuatro secciones principales:
 
-El modo **Barrido comparativo de caudales** reproduce el enfoque del MATLAB con los valores predeterminados `0.015, 0.045, 0.090 kg/s`.
+1. **Simulación**: resultados, análisis nodo por nodo y reporte/exportación. El botón **Ejecutar simulación** permanece en el encabezado superior derecho. Si la potencia solar absorbida es constante, la app omite el dashboard transitorio y muestra directamente el estado representativo/perfiles axiales.
+2. **Propiedades**: diagnóstico de irradiación, temperatura efectiva del cielo, perfil horario editable y propiedades termofísicas del HTF.
+3. **Validación**: calibración con enero/abril/julio/octubre y validación fuera de muestra con los ocho meses restantes. Los parámetros calibrados pueden aplicarse al simulador sin recalibrar contra el hold-out.
+4. **Sensibilidad**: convergencia numérica y perturbación física local de parámetros. Esta sección mide qué parámetros cambian más las salidas; no realiza calibración.
 
-
-## 4.1 Comparación de solvers en Bhambare/Sukhatme
-
-En la pestaña **Validación**, el botón **Comparar RK45 · Radau · BDF — Bhambare/Sukhatme** ejecuta el mismo preset tres veces, cambiando únicamente el integrador temporal. La app presenta:
-
-- temperaturas finales de HTF, absorbedor y vidrio;
-- pérdidas, potencia útil y eficiencia;
-- error frente a Sukhatme;
-- superposición de las trayectorias transitorias;
-- `nfev`, `njev`, `nlu`, tiempo de CPU y `max|dT/dt|` final.
-
-Esto permite verificar si la discrepancia documental depende del solver o de la formulación/parametrización física.
+Los benchmarks Bhambare/Sukhatme y Rea/Fiamonzini se mantienen como diagnósticos documentales secundarios dentro de Validación, diferenciados de la validación predictiva fuera de muestra.
 
 ## 5. Guardar parámetros y resultados
 
@@ -117,7 +90,7 @@ En **Reporte y exportación**:
 - **Guardar proyecto JSON** conserva configuración y propiedades editadas.
 - **Cargar proyecto JSON** restaura esos valores en otra sesión.
 - **Descargar reporte TXT** genera el reporte técnico en texto plano.
-- **Exportar resultados XLSX** guarda las series globales y el estado nodal final.
+- **Exportar resultados XLSX** guarda las series globales, el estado nodal final y, cuando existe una validación hold-out, sus indicadores de error, detalle y parámetros calibrados.
 
 Los cambios efectuados directamente en los archivos `.py` se guardan normalmente con `Ctrl+S` en VSCode.
 
