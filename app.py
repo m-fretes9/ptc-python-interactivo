@@ -1296,7 +1296,10 @@ with tab_validation:
         bmc[1].metric("RMS error relativo", f"{bm['RMSRE_pct']:.3f} %")
         bmc[2].metric("Bias relativo medio", f"{bm['Bias_rel_medio_pct']:+.3f} %")
         bmc[3].metric("Error máximo", f"{bm['Error_max_pct']:.3f} %")
-        if bv.get("applied_parameters", {}).get("near_bounds"):
+        # ``applied_parameters`` es None cuando se ejecuta con parámetros nominales.
+        # No encadenar .get() directamente sobre ese valor opcional.
+        bh_applied_parameters = bv.get("applied_parameters") or {}
+        if bh_applied_parameters.get("near_bounds"):
             st.warning(
                 "Los parámetros identificados utilizados en esta corrida están próximos al límite superior del espacio de búsqueda. "
                 "Una reducción del error no implica que esos valores sean necesariamente propiedades físicas reales."

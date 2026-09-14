@@ -790,7 +790,9 @@ def validate_rea_prototype_mode(
             "EndLoss_Python": endloss_python,
         }
     )
-    meta = cfg.get("preset_meta", {})
+    # preset_meta es opcional en configuraciones antiguas/de sesión; si existe
+    # explícitamente como None, ``dict.get(..., {})`` devolvería None.
+    meta = cfg.get("preset_meta") or {}
     mode_label = str(meta.get("prototype_validation_mode_label", validation_mode))
     if str(validation_mode).lower() == "trnsys_published":
         note = (

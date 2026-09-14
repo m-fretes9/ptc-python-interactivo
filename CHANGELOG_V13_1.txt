@@ -1,0 +1,6 @@
+V13.1 — Robustez frente a valores opcionales None en validaciones
+
+- Corrige AttributeError: 'NoneType' object has no attribute 'get'.
+- Bhambare: applied_parameters puede ser None en modo nominal; la UI ahora lo normaliza a {} antes de consultar near_bounds.
+- Rea/Fiamonzini: preset_meta se normaliza con `or {}` para tolerar sesiones/configuraciones antiguas donde la clave exista con valor None.
+- No se modifica ninguna ecuación, parámetro físico, preset, métrica o resultado numérico.
