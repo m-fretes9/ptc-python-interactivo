@@ -397,6 +397,50 @@ def prototype_tcc_table() -> dict[str, Any]:
 
 
 
+REA_IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14: dict[str, dict[str, Any]] = {
+    "rea_foz": {
+        "label": "Rea Quille · Foz · modelo inverso 14/09/2026",
+        "eta_opt_eff": 0.5988709459872553,
+        "wind_m_s": 0.000453171255123984,
+        "source": "ptc_modelo_inverso_rea_foz.xlsx",
+    },
+    "rea_alvorada": {
+        "label": "Rea Quille · Alvorada · modelo inverso 14/09/2026",
+        "eta_opt_eff": 0.582784559681394,
+        "wind_m_s": 0.01046720113608728,
+        "source": "ptc_modelo_inverso_rea_alvorada.xlsx",
+    },
+    "rea_prototype": {
+        "label": "Rea Quille/Fiamonzini · Tabela 8 · modelo inverso 14/09/2026",
+        "eta_opt_eff": 0.5583394106143328,
+        "wind_m_s": 6.32658029702888,
+        "source": "ptc_modelo_inverso_rea_prototype_tab_8.xlsx",
+    },
+}
+
+
+def identified_parameter_template(case: str) -> dict[str, Any]:
+    key = str(case).strip().lower()
+    if key not in REA_IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14:
+        raise ValueError(f"No hay template identificado guardado para: {case}")
+    return deepcopy(REA_IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14[key])
+
+
+def apply_identified_parameter_template(cfg: dict[str, Any], case: str) -> dict[str, Any]:
+    """Aplica al config los parámetros identificados guardados del 14/09/2026.
+
+    Los valores son templates de calibración reproducibles, no propiedades universales
+    del colector. En particular, los vientos casi nulos de los casos mensuales deben
+    interpretarse como señal de compensación/identificabilidad, no como mediciones.
+    """
+    spec = identified_parameter_template(case)
+    _set_effective_optical_efficiency(cfg, float(spec["eta_opt_eff"]))
+    cfg["environment"]["wind_m_s"] = float(spec["wind_m_s"])
+    cfg.setdefault("preset_meta", {})["identified_template"] = spec["label"]
+    cfg["preset_meta"]["identified_template_source"] = spec["source"]
+    return spec
+
+
 def prototype_user_export_template() -> dict[str, Any]:
     """Curva benchmark exacta del CSV entregado por el usuario el 14/09/2026."""
     hours = np.asarray(REA_PROTOTYPE_USER_EXPORT_2026_09_14["hours"], dtype=int)
@@ -415,8 +459,8 @@ def prototype_user_export_template() -> dict[str, Any]:
         "table": table,
         "note": (
             "Template de salida incorporado desde 2026-09-14T12-26_export.csv. "
-            "El CSV contiene las curvas de referencia/modelo, pero no contiene los valores de los parámetros "
-            "identificados; por eso se usa como benchmark reproducible y no como preset de parámetros inventados."
+            "Los parámetros que generaron la curva identificada fueron recuperados del XLSX del modelo inverso: "
+            "ηopt,ef=0.5583394106 y viento=6.326580297 m/s. El modo identificado puede ahora reproducirse directamente."
         ),
     }
 
@@ -440,6 +484,7 @@ def validate_rea_prototype_mode(
     *,
     target_key: str = "experimental",
     dni_source: str = "nominal",
+    parameter_template: str = "auto",
     config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Ejecuta uno de los dos modos del prototipo y lo compara con una curva objetivo.
@@ -453,6 +498,15 @@ def validate_rea_prototype_mode(
         cfg, _ = build_rea_prototype_preset(validation_mode, dni_source=dni_source)
     else:
         cfg = deepcopy(config)
+
+    template_key = str(parameter_template).strip().lower()
+    if template_key not in {"auto", "nominal", "identified"}:
+        raise ValueError(f"Template de parámetros desconocido: {parameter_template}")
+    use_identified = template_key == "identified" or (template_key == "auto" and str(target_key).lower() == "csv_identified")
+    applied_template = None
+    if use_identified:
+        applied_template = apply_identified_parameter_template(cfg, "rea_prototype")
+
     result = PTCSimulator(cfg, fluid_database).simulate()
     hours = np.asarray(REA_PROTOTYPE_HOURS["hours"], dtype=float)
     eta_exp = np.asarray(REA_PROTOTYPE_HOURS["eta_exp_pct"], dtype=float)
@@ -504,6 +558,14 @@ def validate_rea_prototype_mode(
             "por lo que IAM y EndLoss varían. El TCC no publica una serie DNI medida; la fuente DNI elegida aquí "
             "es una hipótesis/modelo explícito."
         )
+    if applied_template is not None:
+        note += (
+            f" Parámetros identificados aplicados: ηopt,ef={applied_template['eta_opt_eff']:.10f}, "
+            f"viento={applied_template['wind_m_s']:.6f} m/s ({applied_template['source']})."
+        )
+    else:
+        note += " Parámetros físicos/ópticos nominales del preset."
+
     return {
         "kind": "prototype_mode",
         "mode": str(validation_mode),
@@ -511,6 +573,8 @@ def validate_rea_prototype_mode(
         "target_key": str(target_key),
         "target_label": target_label,
         "dni_source": str(dni_source),
+        "parameter_template": "identified" if applied_template is not None else "nominal",
+        "applied_parameters": applied_template,
         "table": table,
         "result": result,
         "metrics": {

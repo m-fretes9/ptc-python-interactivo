@@ -25,6 +25,8 @@ from validations import (
     compare_bhambare_solvers,
     calibrate_inverse_model,
     inverse_parameter_options,
+    identified_parameter_template,
+    apply_identified_parameter_template,
     prototype_tcc_table,
     prototype_user_export_template,
     validate_rea_prototype_mode,
@@ -1239,7 +1241,7 @@ with tab_validation:
         "csv_initial": "Template CSV · modelo inicial",
         "csv_identified": "Template CSV · modelo identificado",
     }
-    pc = st.columns([1.25, 1.25, 1.1])
+    pc = st.columns([1.2, 1.2, 1.05, 1.15])
     proto_mode = pc[0].selectbox(
         "Modo de simulación",
         list(proto_mode_labels.keys()),
@@ -1263,6 +1265,20 @@ with tab_validation:
     else:
         pc[2].metric("DNI / IAM", "905 / 1")
 
+    if proto_target == "csv_identified":
+        proto_parameter_template = "identified"
+        spec = identified_parameter_template("rea_prototype")
+        pc[3].metric("Parámetros", "Identificados")
+        pc[3].caption(f"ηopt,ef={spec['eta_opt_eff']:.4f} · viento={spec['wind_m_s']:.2f} m/s")
+    else:
+        proto_parameter_template = pc[3].selectbox(
+            "Parámetros del modelo",
+            ["nominal", "identified"],
+            format_func=lambda key: "Nominales" if key == "nominal" else "Identificados 14/09",
+            key="prototype_parameter_template_ui",
+            help="Los parámetros identificados provienen del XLSX del modelo inverso y se aplican realmente a la simulación; no solo cambian la curva objetivo.",
+        )
+
     action_cols = st.columns(2)
     if action_cols[0].button(
         "Ejecutar validación del modo",
@@ -1277,6 +1293,7 @@ with tab_validation:
                     fluid_db,
                     target_key=proto_target,
                     dni_source=proto_dni_source,
+                    parameter_template=proto_parameter_template,
                 )
         except Exception as exc:
             st.exception(exc)
@@ -1289,6 +1306,8 @@ with tab_validation:
         apply_reference_preset(
             "rea_prototype", variant=proto_mode, dni_source=proto_dni_source
         )
+        if proto_parameter_template == "identified":
+            apply_identified_parameter_template(st.session_state.config, "rea_prototype")
         # No escribir directamente en las keys de widgets ya instanciados.
         # Se aplican al comienzo del próximo rerun (initialize_state).
         st.session_state["_pending_widget_state"] = {
@@ -1585,6 +1604,25 @@ with tab_sensitivity:
                 delta=f"{holdout['holdout_score_after_pct'] - holdout['holdout_score_before_pct']:+.2f} pp",
                 delta_color="inverse",
             )
+
+        if inverse_case in {"rea_foz", "rea_alvorada"}:
+            eta_hold = comparison[(comparison["Conjunto"] == "validación") & (comparison["Magnitud"] == "Eta_pct")].copy()
+            if not eta_hold.empty:
+                improved = eta_hold[eta_hold["Error_identificado_pct"].abs() < eta_hold["Error_inicial_pct"].abs()]
+                worsened = eta_hold[eta_hold["Error_identificado_pct"].abs() > eta_hold["Error_inicial_pct"].abs()]
+                gc = st.columns(3)
+                gc[0].metric("Meses hold-out mejorados", f"{len(improved)}/{len(eta_hold)}")
+                gc[1].metric("Meses que empeoran", f"{len(worsened)}/{len(eta_hold)}")
+                gc[2].metric("Generalización", "Mixta" if len(worsened) else "Consistente")
+                if len(worsened):
+                    details = ", ".join(
+                        f"{row.Caso}: {abs(row.Error_inicial_pct):.2f}% → {abs(row.Error_identificado_pct):.2f}%"
+                        for row in worsened.itertuples()
+                    )
+                    st.warning(
+                        "El ajuste reduce el error global, pero no mejora todos los meses de validación. "
+                        f"Empeoran: {details}. Esto es señal de parámetros efectivos no estacionarios, entradas mensuales incompletas o compensación entre parámetros; no invalida el modelo inverso, pero impide tratar el conjunto identificado como una constante universal."
+                    )
 
         for note in inv["notes"]:
             st.caption(note)

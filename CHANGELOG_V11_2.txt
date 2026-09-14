@@ -1,0 +1,10 @@
+V11.2 — templates identificados y diagnóstico de generalización
+
+- El objetivo "Template CSV · modelo identificado" aplica ahora realmente los parámetros encontrados por el modelo inverso del 14/09/2026, en vez de cambiar solo la curva objetivo.
+- Rea/Fiamonzini Tabela 8: eta_opt_eff=0.5583394106143328 y viento=6.32658029702888 m/s.
+- La curva identificada exportada se reproduce con RMSE < 1e-6 pp.
+- Se incorporaron también como metadatos los templates identificados de Rea Foz y Rea Alvorada para trazabilidad.
+- La validación por modo permite seleccionar parámetros nominales o identificados; para csv_identified la aplicación es automática.
+- "Aplicar este modo al simulador" conserva los parámetros identificados cuando corresponde.
+- El modelo inverso mensual muestra cuántos meses hold-out mejoran/empeoran y advierte cuando la generalización es mixta.
+- Suite: 8 tests OK.

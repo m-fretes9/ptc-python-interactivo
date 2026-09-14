@@ -54,3 +54,18 @@ def test_user_csv_template_is_exact_and_validation_runs():
     )
     assert len(out["table"]) == 8
     assert np.isfinite(out["metrics"]["RMSE_pp"])
+
+
+def test_identified_template_reproduces_exported_curve():
+    cfg, db = build_rea_prototype_preset("trnsys_published")
+    out = validate_rea_prototype_mode(
+        "trnsys_published",
+        db,
+        target_key="csv_identified",
+        dni_source="nominal",
+        parameter_template="auto",
+        config=cfg,
+    )
+    assert out["parameter_template"] == "identified"
+    assert out["metrics"]["RMSE_pp"] < 1e-6
+    assert out["metrics"]["MAE_pp"] < 1e-6
