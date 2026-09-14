@@ -1,0 +1,17 @@
+V9 — Diagnóstico de sensibilidad y convergencia
+
+- Nueva pestaña "Sensibilidad".
+- Análisis automático de convergencia numérica Bhambare/Sukhatme:
+  * independencia de malla N = 1..48;
+  * sensibilidad a max_step;
+  * sensibilidad a rtol/atol;
+  * sensibilidad al tiempo de calentamiento / residuo estacionario.
+- Sensibilidad física OAT ±10 %:
+  * óptica: reflectividad, interceptación, transmitancia, absortancia;
+  * pérdidas: emisividades;
+  * ambiente: viento y Tsky;
+  * entradas publicadas: mdot y DNI como controles;
+  * propiedades Paratherm NF: Cp, mu, k, rho.
+- Score RMS frente a Tout, Tabs, Tvid y Qloss de Sukhatme.
+- Ranking tipo tornado de parámetros que más reducen la discrepancia.
+- Exportación CSV de ambos análisis.

@@ -20,6 +20,8 @@ from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
 from validations import (
+    analyze_bhambare_numerical_convergence,
+    analyze_bhambare_physical_sensitivity,
     compare_bhambare_solvers,
     prototype_tcc_table,
     validate_active_preset,
@@ -34,7 +36,9 @@ from visualizations import (
     daily_irradiance_histogram,
     dynamic_overview,
     node_balance,
+    numerical_convergence_figure,
     property_figure,
+    sensitivity_tornado_figure,
     validation_bhambare_figure,
     validation_tcc_figure,
 )
@@ -669,8 +673,8 @@ if run_clicked:
 if st.session_state.results and st.session_state.result_signature != project_signature():
     st.warning("Los parámetros visibles cambiaron después de la última simulación. Ejecute nuevamente para actualizar los resultados.")
 
-tab_sim, tab_nodes, tab_props, tab_validation, tab_report = st.tabs(
-    ["Simulación", "Nodo por nodo", "Propiedades e irradiación", "Validación", "Reporte y exportación"]
+tab_sim, tab_nodes, tab_props, tab_validation, tab_sensitivity, tab_report = st.tabs(
+    ["Simulación", "Nodo por nodo", "Propiedades e irradiación", "Validación", "Sensibilidad", "Reporte y exportación"]
 )
 
 with tab_sim:
@@ -1140,6 +1144,109 @@ with tab_validation:
         prototype_cols[3].metric("MAPE TRNSYS-exp", f"{validation['MAPE_pct']:.2f} %")
         st.caption(validation["note"])
         st.dataframe(validation["table"], use_container_width=True, hide_index=True)
+
+
+with tab_sensitivity:
+    st.subheader("Diagnóstico de sensibilidad y convergencia")
+    st.write(
+        "Este módulo separa dos preguntas distintas: (1) si la solución depende de la discretización o del integrador y "
+        "(2) qué parámetros físicos explican mejor la discrepancia con Sukhatme/Bhambare. "
+        "Se usa el caso Bhambare/Sukhatme porque es la referencia más completa y estricta disponible."
+    )
+
+    sens_cols = st.columns(2)
+    if sens_cols[0].button(
+        "1 · Ejecutar convergencia numérica",
+        type="primary",
+        use_container_width=True,
+        help="Barre nodos, max_step, tolerancias y tiempo de calentamiento.",
+    ):
+        try:
+            with st.spinner("Analizando independencia de malla, paso temporal, tolerancias y estado estacionario..."):
+                st.session_state.validations["numerical_sensitivity"] = analyze_bhambare_numerical_convergence(fluid_db)
+        except Exception as exc:
+            st.exception(exc)
+
+    if sens_cols[1].button(
+        "2 · Ejecutar sensibilidad física ±10 %",
+        use_container_width=True,
+        help="Perturba un parámetro por vez y mide cuánto cambia el ajuste a Sukhatme.",
+    ):
+        try:
+            with st.spinner("Perturbando parámetros físicos uno por uno. Esta prueba puede tardar alrededor de medio minuto..."):
+                st.session_state.validations["physical_sensitivity"] = analyze_bhambare_physical_sensitivity(fluid_db, perturbation=0.10)
+        except Exception as exc:
+            st.exception(exc)
+
+    if "numerical_sensitivity" in st.session_state.validations:
+        analysis = st.session_state.validations["numerical_sensitivity"]
+        st.divider()
+        st.subheader("1 · Convergencia numérica")
+        st.caption(analysis["note"])
+        summary = analysis["summary"]
+        c = st.columns(4)
+        c[0].metric("N para <0.5 %", str(summary["N_0p5pct"] or "—"))
+        c[1].metric("N para <0.1 %", str(summary["N_0p1pct"] or "—"))
+        c[2].metric("Span Tout por malla", f"{summary['mesh_span_Tout_C']:.5f} °C")
+        c[3].metric("Span Qloss por malla", f"{summary['mesh_span_Qloss_W']:.2f} W")
+        st.plotly_chart(numerical_convergence_figure(analysis["mesh_table"]), use_container_width=True)
+
+        group = st.selectbox(
+            "Detalle numérico",
+            ["Nodos", "max_step_s", "rtol", "Duracion_h"],
+            key="sensitivity_numeric_group",
+        )
+        detail = analysis["table"].loc[analysis["table"]["Grupo"] == group].copy()
+        st.dataframe(detail, use_container_width=True, hide_index=True)
+        st.download_button(
+            "Descargar convergencia numérica · CSV",
+            data=analysis["table"].to_csv(index=False).encode("utf-8"),
+            file_name="ptc_convergencia_numerica_bhambare.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        if summary["N_0p5pct"] is not None and summary["N_0p5pct"] <= 12:
+            st.success(
+                "La solución alcanza independencia de malla antes o en N=12 con el criterio de 0.5 %. "
+                "Si el error documental persiste, aumentar el número de nodos no es la corrección principal."
+            )
+
+    if "physical_sensitivity" in st.session_state.validations:
+        analysis = st.session_state.validations["physical_sensitivity"]
+        st.divider()
+        st.subheader("2 · Sensibilidad física local")
+        st.caption(analysis["note"])
+        baseline = analysis["baseline"]
+        reference = analysis["reference"]
+        c = st.columns(5)
+        c[0].metric("Score base", f"{analysis['baseline_score_pct']:.2f} %")
+        c[1].metric("Tout Python / ref", f"{baseline['Tout_C']:.2f} / {reference['Tout_C']:.2f} °C")
+        c[2].metric("Tabs Python / ref", f"{baseline['Tabs_K']:.2f} / {reference['Tabs_K']:.2f} K")
+        c[3].metric("Tvid Python / ref", f"{baseline['Tvid_K']:.2f} / {reference['Tvid_K']:.2f} K")
+        c[4].metric("Qloss Python / ref", f"{baseline['Qloss_W']:.1f} / {reference['Qloss_W']:.1f} W")
+
+        st.plotly_chart(sensitivity_tornado_figure(analysis["table"]), use_container_width=True)
+        display_cols = [
+            "Parametro", "Categoria", "Nominal", "Valor_menos", "Valor_mas",
+            "Mejor_direccion", "Mejora_score_pp", "Mejor_score_pct",
+            "S_Tout_C", "S_Tabs_K", "S_Tvid_K", "S_Qloss_W", "S_eta_pct",
+        ]
+        st.dataframe(analysis["table"][display_cols], use_container_width=True, hide_index=True)
+        st.download_button(
+            "Descargar sensibilidad física · CSV",
+            data=analysis["table"].to_csv(index=False).encode("utf-8"),
+            file_name="ptc_sensibilidad_fisica_bhambare.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        top = analysis["table"].iloc[0]
+        st.info(
+            f"Mayor capacidad local de reducir la discrepancia: {top['Parametro']} "
+            f"({top['Mejor_direccion']}10 %), con una reducción del score de "
+            f"{top['Mejora_score_pp']:.2f} puntos. Esto identifica sensibilidad, no autoriza calibrar el parámetro fuera de su valor físico/documental."
+        )
 
 with tab_report:
     report_text = build_technical_report(cfg)

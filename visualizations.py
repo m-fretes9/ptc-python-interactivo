@@ -1576,3 +1576,63 @@ def thermal_resistance_network(snapshot: Mapping[str, float], config: Mapping[st
         showlegend=False,
     )
     return fig
+
+
+
+def numerical_convergence_figure(mesh_table: pd.DataFrame) -> go.Figure:
+    """Errores relativos de malla respecto de la solución N=48."""
+    figure = go.Figure()
+    for column, label in (
+        ("Delta_Tout_C_vs_N48_pct", "Tout"),
+        ("Delta_Tabs_K_vs_N48_pct", "Tabs"),
+        ("Delta_Tvid_K_vs_N48_pct", "Tvid"),
+        ("Delta_Qloss_W_vs_N48_pct", "Qloss"),
+        ("Delta_eta_pct_vs_N48_pct", "η"),
+    ):
+        if column in mesh_table:
+            figure.add_trace(
+                go.Scatter(
+                    x=mesh_table["Valor"],
+                    y=mesh_table[column],
+                    mode="lines+markers",
+                    name=label,
+                )
+            )
+    figure.update_layout(
+        title="Independencia de malla · diferencia respecto de N=48",
+        xaxis_title="Número de nodos",
+        yaxis_title="Diferencia relativa (%)",
+        height=430,
+        hovermode="x unified",
+    )
+    figure.update_yaxes(type="log")
+    return figure
+
+
+def sensitivity_tornado_figure(table: pd.DataFrame) -> go.Figure:
+    """Ranking de parámetros por reducción del error frente a Sukhatme."""
+    data = table.sort_values("Mejora_score_pp", ascending=True).copy()
+    figure = go.Figure(
+        go.Bar(
+            x=data["Mejora_score_pp"],
+            y=data["Parametro"],
+            orientation="h",
+            customdata=np.stack(
+                [data["Categoria"], data["Mejor_direccion"], data["Mejor_score_pct"]],
+                axis=-1,
+            ),
+            hovertemplate=(
+                "%{y}<br>Mejora del score = %{x:.3f} pp"
+                "<br>Categoría = %{customdata[0]}"
+                "<br>Dirección = %{customdata[1]}10 %"
+                "<br>Mejor score = %{customdata[2]:.3f} %<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title="Sensibilidad local · parámetros que más acercan el modelo a Sukhatme",
+        xaxis_title="Reducción del score RMS de error (puntos porcentuales)",
+        yaxis_title="",
+        height=max(480, 34 * len(data)),
+    )
+    return figure

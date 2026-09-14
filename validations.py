@@ -480,3 +480,292 @@ def validate_active_preset(
         }
 
     raise ValueError(f"Tipo de preset no soportado por la validación activa: {family}")
+
+
+
+def _bhambare_reference_bundle(
+    fluid_database: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, float]]:
+    """Configuración y referencia estricta usada por los diagnósticos de sensibilidad."""
+    cfg, _ = build_bhambare_sukhatme_preset()
+    ref_meta = cfg["preset_meta"]["reference"]
+    properties = FluidPropertyEvaluator("ParathermNF", fluid_database)
+    tout_ref = float(ref_meta["Tout_book_C"])
+    tin_ref = float(ref_meta["Tin_C"])
+    prop_mean = properties(0.5 * (tin_ref + tout_ref) + 273.15)
+    qutil_ref = float(ref_meta["mdot_kg_s"]) * prop_mean.Cp * (tout_ref - tin_ref)
+    eta_ref = 100.0 * qutil_ref / (
+        float(ref_meta["beam_W_m2"])
+        * float(cfg["geometry"]["W"])
+        * float(cfg["geometry"]["L"])
+    )
+    reference = {
+        "Tout_C": tout_ref,
+        "Tabs_K": float(ref_meta["Tabs_book_K"]),
+        "Tvid_K": float(ref_meta["Tglass_book_K"]),
+        "Qloss_W": float(ref_meta["Qloss_book_W"]),
+        "Qutil_W": qutil_ref,
+        "eta_pct": eta_ref,
+    }
+    return cfg, reference
+
+
+def _final_metrics(result: Any) -> dict[str, float]:
+    k = len(result.t_s) - 1
+    rates = np.concatenate(
+        [
+            np.asarray(result.node_diag["dTf_dt_K_s"][k], dtype=float),
+            np.asarray(result.node_diag["dTabs_dt_K_s"][k], dtype=float),
+            np.asarray(result.node_diag["dTglass_dt_K_s"][k], dtype=float),
+        ]
+    )
+    return {
+        "Tout_C": float(result.Tout_C[k]),
+        "Tabs_K": float(result.Tabs_mean_C[k] + 273.15),
+        "Tvid_K": float(result.Tglass_mean_C[k] + 273.15),
+        "Qloss_W": float(result.scalar_diag["Qloss_W"][k]),
+        "Qutil_W": float(result.scalar_diag["Quseful_W"][k]),
+        "eta_pct": float(result.scalar_diag["eta_pct"][k]),
+        "max_abs_dTdt_K_s": float(np.nanmax(np.abs(rates))),
+        "nfev": float(result.nfev),
+    }
+
+
+def _reference_error_score(metrics: Mapping[str, float], reference: Mapping[str, float]) -> float:
+    """RMS de errores relativos de las cuatro magnitudes directamente tabuladas por Sukhatme."""
+    keys = ("Tout_C", "Tabs_K", "Tvid_K", "Qloss_W")
+    errors = [
+        (float(metrics[key]) - float(reference[key]))
+        / max(abs(float(reference[key])), np.finfo(float).eps)
+        for key in keys
+    ]
+    return 100.0 * float(np.sqrt(np.mean(np.square(errors))))
+
+
+def _run_case_fast(
+    cfg: Mapping[str, Any],
+    fluid_database: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, float], float]:
+    started = perf_counter()
+    result = PTCSimulator(cfg, fluid_database).simulate()
+    elapsed = perf_counter() - started
+    metrics = _final_metrics(result)
+    metrics["cpu_s"] = float(elapsed)
+    return metrics, elapsed
+
+
+def analyze_bhambare_numerical_convergence(
+    fluid_database: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Diagnóstico de independencia de malla, paso, tolerancias y duración.
+
+    El análisis mantiene la física del caso Bhambare/Sukhatme fija. Se usa BDF
+    para que la prueba espacial/temporal no quede dominada por el costo de RK45;
+    la sensibilidad al integrador ya se evalúa por separado.
+    """
+    base_cfg, reference = _bhambare_reference_bundle(fluid_database)
+    base_cfg = deepcopy(base_cfg)
+    base_cfg["solver"]["method"] = "BDF"
+    base_cfg["operation"]["output_step_s"] = 600.0
+
+    def execute(group: str, value: float | int, cfg: dict[str, Any]) -> dict[str, Any]:
+        metrics, _ = _run_case_fast(cfg, fluid_database)
+        return {
+            "Grupo": group,
+            "Valor": value,
+            **metrics,
+            "Score_vs_Sukhatme_pct": _reference_error_score(metrics, reference),
+        }
+
+    rows: list[dict[str, Any]] = []
+
+    # 1) Independencia espacial. Un paso temporal moderado acelera la prueba sin
+    # alterar la solución final; la sensibilidad a max_step se prueba después.
+    for nseg in (1, 2, 4, 6, 8, 12, 16, 24, 32, 48):
+        cfg = deepcopy(base_cfg)
+        cfg["geometry"]["Nseg"] = int(nseg)
+        cfg["solver"]["max_step_s"] = 120.0
+        rows.append(execute("Nodos", nseg, cfg))
+
+    # 2) Sensibilidad al paso máximo del integrador con N=12.
+    for max_step in (600.0, 300.0, 120.0, 60.0, 20.0, 10.0):
+        cfg = deepcopy(base_cfg)
+        cfg["geometry"]["Nseg"] = 12
+        cfg["solver"]["max_step_s"] = float(max_step)
+        rows.append(execute("max_step_s", max_step, cfg))
+
+    # 3) Sensibilidad a tolerancias. atol se mantiene una década por debajo de rtol.
+    for rtol in (1e-4, 1e-5, 1e-6, 1e-7, 1e-8):
+        cfg = deepcopy(base_cfg)
+        cfg["geometry"]["Nseg"] = 12
+        cfg["solver"]["max_step_s"] = 120.0
+        cfg["solver"]["rtol"] = float(rtol)
+        cfg["solver"]["atol"] = float(rtol) / 10.0
+        rows.append(execute("rtol", rtol, cfg))
+
+    # 4) Tiempo de calentamiento desde las condiciones iniciales hasta 12:30 LAT.
+    end_s = float(base_cfg["operation"]["t_end_s"])
+    for hours in (0.5, 1.0, 2.0, 4.0, 8.0):
+        cfg = deepcopy(base_cfg)
+        cfg["geometry"]["Nseg"] = 12
+        cfg["solver"]["max_step_s"] = 120.0
+        cfg["operation"]["t_start_s"] = end_s - float(hours) * 3600.0
+        rows.append(execute("Duracion_h", hours, cfg))
+
+    table = pd.DataFrame(rows)
+
+    # Para la malla, la solución N=48 se toma como referencia interna de convergencia.
+    mesh = table.loc[table["Grupo"] == "Nodos"].copy()
+    mesh_ref = mesh.loc[mesh["Valor"].astype(float).idxmax()]
+    for key in ("Tout_C", "Tabs_K", "Tvid_K", "Qloss_W", "eta_pct"):
+        denom = max(abs(float(mesh_ref[key])), np.finfo(float).eps)
+        mesh[f"Delta_{key}_vs_N48_pct"] = 100.0 * np.abs(mesh[key].astype(float) - float(mesh_ref[key])) / denom
+    mesh["Max_delta_vs_N48_pct"] = mesh[
+        [f"Delta_{key}_vs_N48_pct" for key in ("Tout_C", "Tabs_K", "Tvid_K", "Qloss_W", "eta_pct")]
+    ].max(axis=1)
+
+    # Primer N que queda por debajo de 0.5 % y 0.1 % en todas las magnitudes.
+    def first_n(tol: float) -> int | None:
+        ok = mesh.loc[mesh["Max_delta_vs_N48_pct"] <= tol]
+        return int(ok.iloc[0]["Valor"]) if not ok.empty else None
+
+    summary = {
+        "N_0p5pct": first_n(0.5),
+        "N_0p1pct": first_n(0.1),
+        "mesh_span_Qloss_W": float(mesh["Qloss_W"].max() - mesh["Qloss_W"].min()),
+        "mesh_span_Tout_C": float(mesh["Tout_C"].max() - mesh["Tout_C"].min()),
+        "reference": reference,
+    }
+    return {
+        "table": table,
+        "mesh_table": mesh,
+        "summary": summary,
+        "reference": reference,
+        "note": (
+            "Esta prueba separa convergencia numérica de discrepancia física. Si N, max_step, rtol y duración alcanzan una meseta mientras el error frente a Sukhatme permanece, el problema no es de discretización/integración sino de hipótesis, propiedades o submodelos físicos."
+        ),
+    }
+
+
+def analyze_bhambare_physical_sensitivity(
+    fluid_database: Mapping[str, Mapping[str, Any]],
+    perturbation: float = 0.10,
+) -> dict[str, Any]:
+    """Sensibilidad local OAT de los principales parámetros físicos del caso.
+
+    Cada parámetro se perturba ±perturbation manteniendo todos los demás fijos.
+    Se reporta la elasticidad normalizada y cuánto mejora/empeora el ajuste a las
+    cuatro magnitudes tabuladas por Sukhatme.
+    """
+    p = float(perturbation)
+    if not (0.0 < p < 0.5):
+        raise ValueError("perturbation debe estar entre 0 y 0.5")
+
+    base_cfg, reference = _bhambare_reference_bundle(fluid_database)
+    base_cfg = deepcopy(base_cfg)
+    base_cfg["solver"]["method"] = "BDF"
+    base_cfg["solver"]["max_step_s"] = 300.0
+    base_cfg["operation"]["output_step_s"] = 600.0
+    base_metrics, _ = _run_case_fast(base_cfg, fluid_database)
+    base_score = _reference_error_score(base_metrics, reference)
+
+    # label, category, getter(cfg,db), setter(cfg,db,value), bounds
+    specs: list[tuple[str, str, Any, Any, tuple[float | None, float | None]]] = []
+
+    def cfg_spec(label: str, category: str, path: tuple[str, ...], bounds=(None, None)) -> None:
+        def getter(cfg, db):
+            obj = cfg
+            for key in path:
+                obj = obj[key]
+            return float(obj)
+        def setter(cfg, db, value):
+            obj = cfg
+            for key in path[:-1]:
+                obj = obj[key]
+            obj[path[-1]] = float(value)
+        specs.append((label, category, getter, setter, bounds))
+
+    cfg_spec("Reflectividad del espejo", "Óptica", ("optics", "reflectivity"), (0.0, 1.0))
+    cfg_spec("Factor de interceptación", "Óptica", ("optics", "intercept_factor"), (0.0, 1.0))
+    cfg_spec("Transmitancia del vidrio", "Óptica", ("materials", "glass", "tau"), (0.0, 1.0))
+    cfg_spec("Absortancia del absorbedor", "Óptica", ("materials", "absorber", "alpha"), (0.0, 1.0))
+    cfg_spec("Emisividad del absorbedor", "Pérdidas", ("materials", "absorber", "eps"), (0.01, 1.0))
+    cfg_spec("Emisividad del vidrio", "Pérdidas", ("materials", "glass", "eps"), (0.01, 1.0))
+    cfg_spec("Velocidad del viento", "Ambiente", ("environment", "wind_m_s"), (0.0, None))
+    cfg_spec("Delta T cielo", "Ambiente", ("environment", "sky_delta_K"), (0.0, None))
+    cfg_spec("Caudal másico", "Entrada publicada", ("operation", "mdot"), (1e-8, None))
+    cfg_spec("DNI", "Entrada publicada", ("solar", "DNI_constant_W_m2"), (0.0, None))
+
+    # Multiplicadores de propiedades del fluido: son especialmente importantes
+    # porque Bhambare no publica tablas completas de rho, mu y k de Paratherm NF.
+    def fluid_mult_spec(label: str, key: str) -> None:
+        def getter(cfg, db):
+            return float(db["ParathermNF"]["multipliers"][key])
+        def setter(cfg, db, value):
+            db["ParathermNF"]["multipliers"][key] = float(value)
+        specs.append((label, "Propiedades HTF", getter, setter, (0.05, None)))
+
+    fluid_mult_spec("Multiplicador Cp HTF", "Cp")
+    fluid_mult_spec("Multiplicador μ HTF", "mu")
+    fluid_mult_spec("Multiplicador k HTF", "k")
+    fluid_mult_spec("Multiplicador ρ HTF", "rho")
+
+    rows: list[dict[str, Any]] = []
+    for label, category, getter, setter, bounds in specs:
+        nominal = float(getter(base_cfg, fluid_database))
+        values: dict[str, dict[str, float]] = {}
+        for direction, factor in (("-", 1.0 - p), ("+", 1.0 + p)):
+            cfg = deepcopy(base_cfg)
+            db = deepcopy(fluid_database)
+            value = nominal * factor
+            lo, hi = bounds
+            if lo is not None:
+                value = max(float(lo), value)
+            if hi is not None:
+                value = min(float(hi), value)
+            setter(cfg, db, value)
+            metrics, _ = _run_case_fast(cfg, db)
+            values[direction] = {**metrics, "parameter_value": float(value)}
+
+        minus = values["-"]
+        plus = values["+"]
+        score_minus = _reference_error_score(minus, reference)
+        score_plus = _reference_error_score(plus, reference)
+        best_score = min(score_minus, score_plus)
+        best_direction = "-" if score_minus <= score_plus else "+"
+
+        # Elasticidades centrales: (dy/y)/(dp/p). Para los parámetros limitados
+        # por 1.0 se usa el delta real aplicado.
+        dp_rel = (plus["parameter_value"] - minus["parameter_value"]) / max(abs(nominal), np.finfo(float).eps)
+        row: dict[str, Any] = {
+            "Parametro": label,
+            "Categoria": category,
+            "Nominal": nominal,
+            "Valor_menos": minus["parameter_value"],
+            "Valor_mas": plus["parameter_value"],
+            "Score_base_pct": base_score,
+            "Score_menos_pct": score_minus,
+            "Score_mas_pct": score_plus,
+            "Mejor_direccion": best_direction,
+            "Mejor_score_pct": best_score,
+            "Mejora_score_pp": base_score - best_score,
+        }
+        for key in ("Tout_C", "Tabs_K", "Tvid_K", "Qloss_W", "Qutil_W", "eta_pct"):
+            y0 = float(base_metrics[key])
+            dy_rel = (float(plus[key]) - float(minus[key])) / max(abs(y0), np.finfo(float).eps)
+            row[f"S_{key}"] = dy_rel / dp_rel if abs(dp_rel) > np.finfo(float).eps else float("nan")
+            row[f"Delta_{key}_menos"] = float(minus[key]) - y0
+            row[f"Delta_{key}_mas"] = float(plus[key]) - y0
+        rows.append(row)
+
+    table = pd.DataFrame(rows).sort_values("Mejora_score_pp", ascending=False).reset_index(drop=True)
+    return {
+        "table": table,
+        "baseline": base_metrics,
+        "reference": reference,
+        "baseline_score_pct": base_score,
+        "perturbation_pct": 100.0 * p,
+        "note": (
+            "Sensibilidad OAT local: cada parámetro se cambia ±10 % manteniendo el resto fijo. La columna Mejora_score_pp indica cuánto reduce el RMS de error relativo frente a Tout, Tabs, Tvid y Qloss de Sukhatme. Las entradas publicadas (DNI, mdot) se muestran como control de sensibilidad, no como parámetros que deban ajustarse arbitrariamente."
+        ),
+    }
