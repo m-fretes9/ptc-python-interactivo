@@ -9,7 +9,8 @@ experimentales.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Mapping
+from time import perf_counter
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -99,6 +100,169 @@ def validate_bhambare(
         "note": (
             "Q_util y eta de Sukhatme se derivan de Tout, mdot y Cp(T), porque no están tabulados directamente. "
             "El preset interpreta Ib=705 W/m² como irradiancia efectiva constante sobre la apertura para obtener un estado comparable."
+        ),
+    }
+
+
+
+def compare_bhambare_solvers(
+    fluid_database: Mapping[str, Mapping[str, Any]],
+    methods: Sequence[str] = ("RK45", "Radau", "BDF"),
+) -> dict[str, Any]:
+    """Compara RK45, Radau y BDF sobre exactamente el mismo caso Bhambare/Sukhatme.
+
+    El objetivo es aislar el efecto del integrador temporal: geometría, óptica,
+    propiedades, condiciones iniciales, tolerancias y paso máximo permanecen
+    idénticos. También se reporta el residuo térmico final para distinguir entre
+    coincidencia de la variable observada y verdadero acercamiento al estado
+    estacionario.
+    """
+    allowed = {"RK45", "Radau", "BDF"}
+    requested = [str(method).strip() for method in methods]
+    invalid = [method for method in requested if method not in allowed]
+    if invalid:
+        raise ValueError(f"Solvers no soportados: {invalid}. Use RK45, Radau o BDF.")
+    if not requested:
+        raise ValueError("Debe indicarse al menos un solver para la comparación.")
+
+    base_cfg, _ = build_bhambare_sukhatme_preset()
+    ref = base_cfg["preset_meta"]["reference"]
+
+    Tref_glass_K = float(ref["Tglass_book_K"])
+    Tref_abs_K = float(ref["Tabs_book_K"])
+    Tref_out_C = float(ref["Tout_book_C"])
+    Qref_loss_W = float(ref["Qloss_book_W"])
+
+    properties = FluidPropertyEvaluator("ParathermNF", fluid_database)
+    prop_mean_ref = properties(0.5 * (float(ref["Tin_C"]) + Tref_out_C) + 273.15)
+    Qref_useful_W = (
+        float(ref["mdot_kg_s"])
+        * prop_mean_ref.Cp
+        * (Tref_out_C - float(ref["Tin_C"]))
+    )
+    eta_ref_pct = 100.0 * Qref_useful_W / (
+        float(ref["beam_W_m2"])
+        * float(base_cfg["geometry"]["W"])
+        * float(base_cfg["geometry"]["L"])
+    )
+
+    sukhatme = {
+        "Tvid_K": Tref_glass_K,
+        "Tabs_K": Tref_abs_K,
+        "Tout_C": Tref_out_C,
+        "Qloss_W": Qref_loss_W,
+        "Qutil_W": Qref_useful_W,
+        "eta_pct": eta_ref_pct,
+    }
+    bhambare = {
+        "Tvid_K": float(ref["Tglass_article_K"]),
+        "Tabs_K": float(ref["Tabs_article_K"]),
+        "Tout_C": float(ref["Tout_article_C"]),
+        "Qloss_W": float(ref["Qloss_article_W"]),
+        "Qutil_W": float("nan"),
+        "eta_pct": float("nan"),
+    }
+
+    results: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    performance_rows: list[dict[str, Any]] = []
+
+    for method in requested:
+        cfg = deepcopy(base_cfg)
+        cfg["solver"]["method"] = method
+        started = perf_counter()
+        result = PTCSimulator(cfg, fluid_database).simulate()
+        elapsed_s = perf_counter() - started
+        results[method] = result
+        k = len(result.t_s) - 1
+
+        final_rates = np.concatenate(
+            [
+                np.asarray(result.node_diag["dTf_dt_K_s"][k], dtype=float),
+                np.asarray(result.node_diag["dTabs_dt_K_s"][k], dtype=float),
+                np.asarray(result.node_diag["dTglass_dt_K_s"][k], dtype=float),
+            ]
+        )
+        max_residual = float(np.nanmax(np.abs(final_rates)))
+
+        row = {
+            "Solver": method,
+            "Tvid_K": float(result.Tglass_mean_C[k] + 273.15),
+            "Tabs_K": float(result.Tabs_mean_C[k] + 273.15),
+            "Tout_C": float(result.Tout_C[k]),
+            "Qloss_W": float(result.scalar_diag["Qloss_W"][k]),
+            "Qutil_W": float(result.scalar_diag["Quseful_W"][k]),
+            "eta_pct": float(result.scalar_diag["eta_pct"][k]),
+        }
+        for key in ("Tvid_K", "Tabs_K", "Tout_C", "Qloss_W", "Qutil_W", "eta_pct"):
+            row[f"Err_{key}_vs_Sukhatme_pct"] = _relative_error(row[key], sukhatme[key])
+        rows.append(row)
+        performance_rows.append(
+            {
+                "Solver": method,
+                "Tiempo_CPU_s": elapsed_s,
+                "nfev": int(result.nfev),
+                "njev": int(result.njev),
+                "nlu": int(result.nlu),
+                "max_abs_dTdt_final_K_s": max_residual,
+                "Mensaje": result.solver_message,
+            }
+        )
+
+    solver_table = pd.DataFrame(rows)
+    performance_table = pd.DataFrame(performance_rows)
+
+    # Matriz compacta para contrastar directamente las referencias y los tres solvers.
+    magnitude_specs = [
+        ("T_vidrio_K", "Tvid_K"),
+        ("T_absorbedor_K", "Tabs_K"),
+        ("T_salida_C", "Tout_C"),
+        ("Q_perdidas_W", "Qloss_W"),
+        ("Q_util_derivado_W", "Qutil_W"),
+        ("eta_derivada_pct", "eta_pct"),
+    ]
+    comparison_data: dict[str, Any] = {
+        "Magnitud": [label for label, _ in magnitude_specs],
+        "Referencia_Sukhatme": [sukhatme[key] for _, key in magnitude_specs],
+        "Modelo_Bhambare": [bhambare[key] for _, key in magnitude_specs],
+    }
+    for method in requested:
+        solver_row = solver_table.loc[solver_table["Solver"] == method].iloc[0]
+        comparison_data[method] = [float(solver_row[key]) for _, key in magnitude_specs]
+    comparison_table = pd.DataFrame(comparison_data)
+
+    spread_specs = {
+        "Tout_span_C": "Tout_C",
+        "Tabs_span_K": "Tabs_K",
+        "Tvid_span_K": "Tvid_K",
+        "Qloss_span_W": "Qloss_W",
+        "Qutil_span_W": "Qutil_W",
+        "eta_span_pp": "eta_pct",
+    }
+    spreads: dict[str, float] = {}
+    for name, column in spread_specs.items():
+        values = solver_table[column].to_numpy(dtype=float)
+        spreads[name] = float(np.nanmax(values) - np.nanmin(values))
+    spreads["max_solver_relative_spread_pct"] = float(
+        max(
+            100.0
+            * (np.nanmax(solver_table[column]) - np.nanmin(solver_table[column]))
+            / max(abs(float(np.nanmean(solver_table[column]))), np.finfo(float).eps)
+            for column in ("Tout_C", "Tabs_K", "Tvid_K", "Qloss_W", "Qutil_W", "eta_pct")
+        )
+    )
+
+    return {
+        "solver_table": solver_table,
+        "performance_table": performance_table,
+        "comparison_table": comparison_table,
+        "results": results,
+        "spreads": spreads,
+        "config": base_cfg,
+        "note": (
+            "Los tres métodos resuelven exactamente el mismo caso Bhambare/Sukhatme con las mismas tolerancias y el mismo paso máximo. "
+            "Por lo tanto, si sus estados finales coinciden y la discrepancia con la referencia permanece, esa diferencia no puede atribuirse al solver por sí sola. "
+            "El residuo max|dT/dt| final se incluye para comprobar cuánto se acercó cada integración al estado estacionario."
         ),
     }
 

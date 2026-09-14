@@ -191,6 +191,7 @@ def default_config() -> dict[str, Any]:
             "UL_area": "apertura",
         },
         "solver": {
+            "method": "RK45",
             "rtol": 1e-6,
             "atol": 1e-7,
             "max_step_s": 60.0,

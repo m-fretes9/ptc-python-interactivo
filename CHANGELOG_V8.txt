@@ -1,0 +1,15 @@
+PTC Python Interactivo — V8
+
+Implementación solicitada: comparación automática de solvers para el caso Bhambare/Sukhatme.
+
+Novedades:
+- Botón en Validación: "Comparar RK45 · Radau · BDF — Bhambare/Sukhatme".
+- Ejecuta exactamente el mismo preset con los tres integradores.
+- Tabla final contra Sukhatme y contra los valores reportados por Bhambare.
+- Tabla de resultados por solver con errores relativos frente a Sukhatme.
+- Gráfico superpuesto de Tout, Tabs, Tvid, Qloss, Qutil y eta durante toda la simulación.
+- Diagnóstico de costo numérico: tiempo CPU, nfev, njev y nlu.
+- Residuo térmico final max|dT/dt| para evaluar aproximación a régimen estacionario.
+- Métricas de dispersión entre solvers y exportación CSV.
+
+Se conserva la factorización exacta de los términos radiativos T1^4 - T2^4 introducida en V7.

@@ -20,6 +20,7 @@ from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
 from validations import (
+    compare_bhambare_solvers,
     prototype_tcc_table,
     validate_active_preset,
     validate_bhambare,
@@ -28,6 +29,7 @@ from validations import (
 )
 from visualizations import (
     axial_profiles,
+    bhambare_solver_comparison_figure,
     comparative_overview,
     daily_irradiance_histogram,
     dynamic_overview,
@@ -609,10 +611,30 @@ with st.sidebar:
             model["support_loss_fraction"] = st.number_input(
                 "Fracción de pérdidas en soportes", min_value=0.0, max_value=1.0, value=float(model["support_loss_fraction"]), step=0.005
             )
+        solver_methods = ["RK45", "Radau", "BDF"]
+        current_method = str(solver.get("method", "RK45"))
+        if current_method not in solver_methods:
+            current_method = "RK45"
+        solver["method"] = st.selectbox(
+            "Método de integración temporal",
+            solver_methods,
+            index=solver_methods.index(current_method),
+            help=(
+                "RK45: Runge-Kutta explícito 5(4). Radau: Runge-Kutta implícito de orden 5. "
+                "BDF: fórmula de diferenciación hacia atrás para sistemas potencialmente stiff."
+            ),
+        )
         solver["rtol"] = st.number_input("rtol", min_value=1e-12, max_value=1e-2, value=float(solver["rtol"]), format="%.1e")
         solver["atol"] = st.number_input("atol", min_value=1e-12, max_value=1e-2, value=float(solver["atol"]), format="%.1e")
-        solver["max_step_s"] = st.number_input("Paso máximo BDF (s)", min_value=0.1, value=float(solver["max_step_s"]), step=5.0)
-        solver["use_jac_sparsity"] = st.checkbox("Usar patrón disperso de Jacobiano", value=bool(solver["use_jac_sparsity"]))
+        solver["max_step_s"] = st.number_input(
+            "Paso máximo del integrador (s)", min_value=0.1, value=float(solver["max_step_s"]), step=5.0
+        )
+        solver["use_jac_sparsity"] = st.checkbox(
+            "Usar patrón disperso de Jacobiano",
+            value=bool(solver["use_jac_sparsity"]),
+            disabled=solver["method"] == "RK45",
+            help="Solo se utiliza con BDF y Radau; RK45 es un método explícito.",
+        )
 
     st.divider()
     sweep = st.checkbox("Barrido comparativo de caudales", value=False)
@@ -1016,6 +1038,20 @@ with tab_validation:
     if val_cols[3].button("Tabla 8 · Experimental/TRNSYS", use_container_width=True):
         st.session_state.validations["prototype_table"] = prototype_tcc_table()
 
+    if st.button(
+        "Comparar RK45 · Radau · BDF — Bhambare/Sukhatme",
+        use_container_width=True,
+        help=(
+            "Ejecuta el mismo preset Bhambare/Sukhatme tres veces, cambiando solamente el integrador temporal. "
+            "Permite separar el efecto del solver de la discrepancia física con la referencia."
+        ),
+    ):
+        try:
+            with st.spinner("Ejecutando Bhambare/Sukhatme con RK45, Radau y BDF. Puede tardar algunos segundos..."):
+                st.session_state.validations["bhambare_solvers"] = compare_bhambare_solvers(fluid_db)
+        except Exception as exc:
+            st.exception(exc)
+
     if "active_preset" in st.session_state.validations:
         validation = st.session_state.validations["active_preset"]
         st.divider()
@@ -1036,6 +1072,47 @@ with tab_validation:
             st.plotly_chart(validation_bhambare_figure(validation["table"]), use_container_width=True)
         else:
             st.dataframe(validation["table"], use_container_width=True, hide_index=True)
+
+    if "bhambare_solvers" in st.session_state.validations:
+        comparison = st.session_state.validations["bhambare_solvers"]
+        st.divider()
+        st.subheader("Bhambare/Sukhatme — sensibilidad al solver")
+        st.caption(comparison["note"])
+
+        spreads = comparison["spreads"]
+        spread_cols = st.columns(5)
+        spread_cols[0].metric("Δ Tout entre solvers", f"{spreads['Tout_span_C']:.6f} °C")
+        spread_cols[1].metric("Δ Tabs entre solvers", f"{spreads['Tabs_span_K']:.6f} K")
+        spread_cols[2].metric("Δ Q pérdidas", f"{spreads['Qloss_span_W']:.6f} W")
+        spread_cols[3].metric("Δ η", f"{spreads['eta_span_pp']:.6f} pp")
+        spread_cols[4].metric("Máx. dispersión relativa", f"{spreads['max_solver_relative_spread_pct']:.6f} %")
+
+        st.markdown("**Comparación final con las referencias**")
+        st.dataframe(comparison["comparison_table"], use_container_width=True, hide_index=True)
+
+        st.markdown("**Resultados por solver y error frente a Sukhatme**")
+        st.dataframe(comparison["solver_table"], use_container_width=True, hide_index=True)
+
+        st.plotly_chart(
+            bhambare_solver_comparison_figure(comparison["results"]),
+            use_container_width=True,
+        )
+
+        st.markdown("**Costo numérico y residuo al final de la simulación**")
+        st.dataframe(comparison["performance_table"], use_container_width=True, hide_index=True)
+        st.caption(
+            "max|dT/dt| final se calcula considerando HTF, absorbedor y vidrio en todos los nodos. "
+            "Un valor menor indica que la solución está más próxima al estado estacionario al terminar el intervalo."
+        )
+
+        csv_solver = comparison["solver_table"].to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Descargar comparación de solvers · CSV",
+            data=csv_solver,
+            file_name="bhambare_sukhatme_comparacion_solvers.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
     for key, title in (("rea_foz", "Rea Quille — Foz do Iguaçu — Tabela 10"), ("rea_alvorada", "Rea Quille — Alvorada do Norte — Tabela 11")):
         if key in st.session_state.validations:

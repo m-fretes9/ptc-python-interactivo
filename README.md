@@ -7,10 +7,11 @@ Aplicación interactiva para simular un colector solar cilindro-parabólico con 
 - convección interna laminar, Dittus-Boelter y Gnielinski-Forristall;
 - radiación absorbedor-vidrio y superficie-cielo;
 - convección exterior y tres opciones para el espacio anular;
-- solver rígido BDF de SciPy, equivalente funcional de `ode15s`;
+- solver seleccionable SciPy `RK45`, `Radau` o `BDF`;
 - edición de geometría, óptica, ambiente, irradiación y propiedades de fluidos;
 - visualización nodo por nodo, esquema del PTC y red de resistencias con flujos térmicos;
-- validaciones Bhambare/Sukhatme, TCC/TRNSYS y Tabla 8 del prototipo.
+- validaciones Bhambare/Sukhatme, TCC/TRNSYS y Tabla 8 del prototipo;
+- comparación automática RK45/Radau/BDF para Bhambare/Sukhatme, incluyendo error frente a la referencia, costo numérico y residuo térmico final.
 
 Las ecuaciones y parámetros predeterminados se basan en:
 
@@ -96,6 +97,19 @@ Desde VSCode también puede abrir **Run and Debug** y seleccionar **Ejecutar int
 
 El modo **Barrido comparativo de caudales** reproduce el enfoque del MATLAB con los valores predeterminados `0.015, 0.045, 0.090 kg/s`.
 
+
+## 4.1 Comparación de solvers en Bhambare/Sukhatme
+
+En la pestaña **Validación**, el botón **Comparar RK45 · Radau · BDF — Bhambare/Sukhatme** ejecuta el mismo preset tres veces, cambiando únicamente el integrador temporal. La app presenta:
+
+- temperaturas finales de HTF, absorbedor y vidrio;
+- pérdidas, potencia útil y eficiencia;
+- error frente a Sukhatme;
+- superposición de las trayectorias transitorias;
+- `nfev`, `njev`, `nlu`, tiempo de CPU y `max|dT/dt|` final.
+
+Esto permite verificar si la discrepancia documental depende del solver o de la formulación/parametrización física.
+
 ## 5. Guardar parámetros y resultados
 
 En **Reporte y exportación**:
@@ -112,7 +126,7 @@ Los cambios efectuados directamente en los archivos `.py` se guardan normalmente
 ```text
 PTC_Python_Interactivo/
 ├── app.py                  Interfaz Streamlit
-├── ptc_model.py            Solver BDF, balances y correlaciones
+├── ptc_model.py            Solvers RK45/Radau/BDF, balances y correlaciones
 ├── fluid_properties.py     Propiedades termofísicas
 ├── defaults.py             Parámetros y tablas de referencia
 ├── visualizations.py       Gráficos, PTC y red de resistencias
@@ -135,7 +149,7 @@ La prueba ejecuta un caso corto sin abrir Streamlit.
 
 ## Nota sobre equivalencia numérica
 
-El modelo dinámico se integra con `solve_ivp(method="BDF")` y mantiene propiedades termofísicas dependientes de la temperatura.
+El modelo dinámico se integra con `solve_ivp` y permite seleccionar `RK45`, `Radau` o `BDF`, manteniendo propiedades termofísicas dependientes de la temperatura. Los términos radiativos `T_1^4-T_2^4` se evalúan mediante la factorización algebraicamente exacta `(T_1-T_2)(T_1+T_2)(T_1^2+T_2^2)`.
 
 
 ## Revisión de régimen para agua
@@ -203,3 +217,6 @@ El mapa de calor representa distribución óptica estimada de la potencia absorb
 - Circuito térmico con estética de esquema eléctrico: cables rectos, resistencias compactas y flechas pequeñas al costado de cada resistencia.
 - Selector axial sin slider: únicamente volúmenes grises grandes y clickeables, con `ΔH` y la flecha de transporte dentro de cada volumen.
 - Mapa de calor óptico reforzado visualmente con una banda térmica más gruesa sobre el absorbedor.
+
+## V6 - selector axial estable
+El selector axial ya no depende de Plotly ni de `streamlit-plotly-events`. Cada volumen axial es un botón nativo de Streamlit estilizado con CSS, por lo que el clic actualiza directamente `st.session_state` y cambia el nodo activo, el circuito térmico, los KPIs y las tablas. Los bloques permanecen grandes, grises y contiguos, con la dirección y el valor de ΔH dentro de cada volumen.

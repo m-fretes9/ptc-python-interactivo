@@ -33,7 +33,7 @@ def build_technical_report(config: Mapping[str, Any]) -> str:
         f"- Discretizacion axial: {int(g['Nseg'])} volumenes de control.",
         "- Estados por nodo: temperatura del HTF, del absorbedor y de la cubierta.",
         "- Propiedades rho(T), mu(T), Cp(T) y k(T) actualizadas localmente.",
-        "- Integrador rigido: scipy.integrate.solve_ivp con metodo BDF, equivalente funcional a ode15s.",
+        f"- Integrador temporal: scipy.integrate.solve_ivp con método {solver.get('method', 'BDF')}.",
         "",
         "GEOMETRIA",
         f"L = {g['L']:.6g} m",
@@ -128,7 +128,7 @@ def result_summary(result: SimulationResult) -> str:
     cfg = result.config
     lines = [
         f"Escenario: {cfg['operation'].get('name', 'sin nombre')}",
-        f"Solver: BDF; {result.solver_message}",
+        f"Solver: {result.config['solver'].get('method', 'BDF')}; {result.solver_message}",
         f"Evaluaciones RHS: {result.nfev}; evaluaciones Jacobiano: {result.njev}; factorizaciones LU: {result.nlu}",
         f"Pico DNI: {dni[k]:.3f} W/m2 a LAT {result.LAT_h[k]:.3f} h",
         f"Temperatura de salida: {result.Tout_C[k]:.3f} C",

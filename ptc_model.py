@@ -1,7 +1,8 @@
 """Núcleo numérico del colector cilindro-parabólico (PTC).
 
-Migración directa del modelo MATLAB refactorizado. El equivalente de ode15s
-se implementa con ``scipy.integrate.solve_ivp(method='BDF')``.
+El sistema transitorio se integra con ``scipy.integrate.solve_ivp``. La
+configuración permite comparar BDF, Radau y RK45 sin modificar los balances
+físicos del receptor.
 """
 
 from __future__ import annotations
@@ -143,19 +144,28 @@ class PTCSimulator:
         y0[self.n : 2 * self.n] = float(self.cfg["environment"]["Tamb_K"])
         y0[2 * self.n :] = float(self.cfg["environment"]["Tamb_K"])
 
+        method = str(solver.get("method", "BDF")).strip()
+        allowed_methods = {"BDF", "Radau", "RK45"}
+        if method not in allowed_methods:
+            raise ValueError(
+                f"Método de integración no soportado: {method!r}. "
+                f"Use uno de {sorted(allowed_methods)}."
+            )
+
         kwargs: dict[str, Any] = {
-            "method": "BDF",
+            "method": method,
             "t_eval": t_eval,
             "rtol": float(solver["rtol"]),
             "atol": np.full(n_states, float(solver["atol"]), dtype=float),
             "max_step": float(solver["max_step_s"]),
         }
-        if bool(solver.get("use_jac_sparsity", True)):
+        # El patrón disperso del Jacobiano solo aplica a los métodos implícitos.
+        if method in {"BDF", "Radau"} and bool(solver.get("use_jac_sparsity", True)):
             kwargs["jac_sparsity"] = create_jacobian_sparsity(self.n)
 
         solution = solve_ivp(self.rhs, (t_start, t_end), y0, **kwargs)
         if not solution.success:
-            raise RuntimeError(f"El solver BDF no convergió: {solution.message}")
+            raise RuntimeError(f"El solver {method} no convergió: {solution.message}")
 
         # solve_ivp devuelve y con forma (n_estados, n_tiempos).
         y = solution.y.T
@@ -343,7 +353,7 @@ class PTCSimulator:
                     * np.pi
                     * float(g["D3"])
                     * self.dx
-                    * (Tabs[i] ** 4 - Tglass[i] ** 4)
+                    * fourth_power_difference(Tabs[i], Tglass[i])
                     / max(denominator, np.finfo(float).eps)
                 )
                 h_annulus = annulus_convection(Tabs[i], Tglass[i], cfg)
@@ -373,7 +383,7 @@ class PTCSimulator:
                     * np.pi
                     * float(g["D5"])
                     * self.dx
-                    * (Tglass[i] ** 4 - Tsky**4)
+                    * fourth_power_difference(Tglass[i], Tsky)
                 )
                 q_supports = 0.0
                 if bool(cfg["model"]["include_supports"]):
@@ -434,7 +444,7 @@ class PTCSimulator:
                     * np.pi
                     * float(g["D3"])
                     * self.dx
-                    * (Tabs[i] ** 4 - Tsky**4)
+                    * fourth_power_difference(Tabs[i], Tsky)
                 )
                 q_supports = 0.0
                 if bool(cfg["model"]["include_supports"]):
@@ -856,6 +866,18 @@ def annulus_convection(Tabs_K: float, Tglass_K: float, cfg: Mapping[str, Any]) -
         / geometry_factor
     )
     return float(q_prime / max(np.pi * float(geometry["D3"]) * delta_T, np.finfo(float).eps))
+
+
+def fourth_power_difference(T1_K: float, T2_K: float) -> float:
+    """Evalúa ``T1**4 - T2**4`` mediante factorización algebraicamente exacta.
+
+    ``(T1-T2)(T1+T2)(T1²+T2²)`` evita la resta directa de dos potencias
+    cuartas grandes y cercanas. No modifica la ley de Stefan-Boltzmann ni
+    elimina su no linealidad; únicamente cambia la forma de evaluación.
+    """
+    T1 = float(T1_K)
+    T2 = float(T2_K)
+    return (T1 - T2) * (T1 + T2) * (T1 * T1 + T2 * T2)
 
 
 def effective_resistance(delta_temperature_K: float, heat_flow_W: float) -> float:

@@ -743,6 +743,65 @@ def validation_tcc_figure(table: pd.DataFrame) -> go.Figure:
     return figure
 
 
+
+def bhambare_solver_comparison_figure(results: Mapping[str, SimulationResult]) -> go.Figure:
+    """Superpone las trayectorias RK45/Radau/BDF del caso Bhambare/Sukhatme."""
+    figure = make_subplots(
+        rows=2,
+        cols=3,
+        subplot_titles=(
+            "Temperatura de salida HTF",
+            "Temperatura media del absorbedor",
+            "Temperatura media del vidrio",
+            "Pérdidas térmicas",
+            "Ganancia útil",
+            "Eficiencia térmica HTF",
+        ),
+        horizontal_spacing=0.08,
+        vertical_spacing=0.15,
+    )
+    for method, result in results.items():
+        x = result.LAT_h
+        series = (
+            (result.Tout_C, 1, 1),
+            (result.Tabs_mean_C, 1, 2),
+            (result.Tglass_mean_C, 1, 3),
+            (result.scalar_diag["Qloss_W"], 2, 1),
+            (result.scalar_diag["Quseful_W"], 2, 2),
+            (result.scalar_diag["eta_pct"], 2, 3),
+        )
+        for values, row, col in series:
+            figure.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=values,
+                    mode="lines",
+                    name=method,
+                    legendgroup=method,
+                    showlegend=(row == 1 and col == 1),
+                    hovertemplate=f"{method}<br>LAT=%{{x:.3f}} h<br>valor=%{{y:.6g}}<extra></extra>",
+                ),
+                row=row,
+                col=col,
+            )
+    for col in (1, 2, 3):
+        figure.update_xaxes(title_text="LAT (h)", row=1, col=col)
+        figure.update_xaxes(title_text="LAT (h)", row=2, col=col)
+    figure.update_yaxes(title_text="°C", row=1, col=1)
+    figure.update_yaxes(title_text="°C", row=1, col=2)
+    figure.update_yaxes(title_text="°C", row=1, col=3)
+    figure.update_yaxes(title_text="W", row=2, col=1)
+    figure.update_yaxes(title_text="W", row=2, col=2)
+    figure.update_yaxes(title_text="%", row=2, col=3)
+    figure.update_layout(
+        height=690,
+        title="Bhambare/Sukhatme · sensibilidad al integrador temporal",
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.04, "xanchor": "left", "x": 0.0},
+    )
+    return figure
+
+
 def validation_bhambare_figure(table: pd.DataFrame) -> go.Figure:
     reduced = table.iloc[:4].copy()
     figure = make_subplots(rows=1, cols=2, subplot_titles=("Comparación", "Error relativo"))
