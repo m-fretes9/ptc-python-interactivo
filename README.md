@@ -220,3 +220,27 @@ El mapa de calor representa distribución óptica estimada de la potencia absorb
 
 ## V6 - selector axial estable
 El selector axial ya no depende de Plotly ni de `streamlit-plotly-events`. Cada volumen axial es un botón nativo de Streamlit estilizado con CSS, por lo que el clic actualiza directamente `st.session_state` y cambia el nodo activo, el circuito térmico, los KPIs y las tablas. Los bloques permanecen grandes, grises y contiguos, con la dirección y el valor de ΔH dentro de cada volumen.
+
+## V10 — Identificación multiparámetro / modelo inverso
+
+La pestaña **Sensibilidad** incorpora una tercera etapa: **Identificación multiparámetro (modelo inverso)**. El ajuste usa `scipy.optimize.least_squares` con límites físicos explícitos y reejecuta las referencias después de identificar los parámetros.
+
+Casos disponibles:
+
+- **Bhambare / Sukhatme — Table 4**: ajuste contra `Tout`, `Tabs`, `Tvid` y `Qloss`. Es calibración sobre el mismo caso y se marca como tal; no se presenta como validación independiente.
+- **Rea Quille — Foz do Iguaçu — Tabela 10** y **Alvorada do Norte — Tabela 11**: puede usarse una separación estacional de 4 meses para calibración (Ene/Abr/Jul/Oct) y 8 meses `hold-out` que no participan del ajuste, o usar los 12 meses para ajuste global.
+- **Rea Quille / Fiamonzini — Tabela 8**: identificación exploratoria contra la curva horaria de eficiencia. Se mantiene explícita la limitación de que Tin/Tout horarios no fueron publicados y el preset usa `Tin=25 °C` como hipótesis.
+
+Para evitar falsa identificabilidad de factores ópticos multiplicativos, el inverso identifica por defecto un **factor óptico efectivo** `η_opt,ef = ρ·γ·τ·α·...` y lo impone variando una reflectividad equivalente mientras los demás factores permanecen fijos. También pueden seleccionarse emisividades, viento, cielo, pérdidas de soportes y multiplicadores de propiedades del HTF cuando corresponda.
+
+El optimizador reporta:
+
+- score inicial y final;
+- parámetros nominales, identificados y límites;
+- aviso si un parámetro queda cerca del límite físico;
+- rango y número de condición del Jacobiano para diagnosticar identificabilidad;
+- reejecución de las referencias antes/después;
+- score `hold-out` para los casos mensuales cuando se usa la separación 4+8;
+- exportación XLSX de parámetros y comparación.
+
+Durante la búsqueda se usa una malla reducida `N=6` y `max_step=600 s` para acelerar la evaluación, apoyándose en el estudio previo de independencia de malla. La revalidación final vuelve a la malla completa del preset (normalmente `N=12`).

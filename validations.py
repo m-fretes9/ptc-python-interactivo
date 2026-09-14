@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import least_squares
 
 from fluid_properties import FluidPropertyEvaluator
 from presets import (
@@ -23,6 +24,7 @@ from presets import (
     REA_PROTOTYPE_HOURS,
     build_bhambare_sukhatme_preset,
     build_rea_monthly_preset,
+    build_rea_prototype_preset,
 )
 from ptc_model import PTCSimulator
 
@@ -768,4 +770,566 @@ def analyze_bhambare_physical_sensitivity(
         "note": (
             "Sensibilidad OAT local: cada parámetro se cambia ±10 % manteniendo el resto fijo. La columna Mejora_score_pp indica cuánto reduce el RMS de error relativo frente a Tout, Tabs, Tvid y Qloss de Sukhatme. Las entradas publicadas (DNI, mdot) se muestran como control de sensibilidad, no como parámetros que deban ajustarse arbitrariamente."
         ),
+    }
+
+# -----------------------------------------------------------------------------
+# Identificación paramétrica multiparámetro / modelo inverso
+# -----------------------------------------------------------------------------
+
+
+def _effective_optical_efficiency(cfg: Mapping[str, Any]) -> float:
+    optics = cfg["optics"]
+    absorber = cfg["materials"]["absorber"]
+    value = (
+        float(optics["reflectivity"])
+        * float(optics["intercept_factor"])
+        * float(absorber["alpha"])
+        * float(optics.get("dirt_factor", 1.0))
+        * float(optics.get("shade_factor", 1.0))
+    )
+    if bool(cfg["model"].get("has_glass", False)):
+        value *= float(cfg["materials"]["glass"]["tau"])
+    return float(value)
+
+
+def _set_effective_optical_efficiency(cfg: dict[str, Any], target: float) -> None:
+    """Ajusta rho para imponer eta_opt,ef manteniendo gamma/tau/alpha fijos.
+
+    Esto evita intentar identificar simultáneamente factores ópticos fuertemente
+    correlacionados. El parámetro identificado es el producto efectivo; la
+    reflectividad equivalente solo es el mecanismo usado por el modelo para
+    imponer ese producto.
+    """
+    optics = cfg["optics"]
+    absorber = cfg["materials"]["absorber"]
+    rest = (
+        float(optics["intercept_factor"])
+        * float(absorber["alpha"])
+        * float(optics.get("dirt_factor", 1.0))
+        * float(optics.get("shade_factor", 1.0))
+    )
+    if bool(cfg["model"].get("has_glass", False)):
+        rest *= float(cfg["materials"]["glass"]["tau"])
+    if rest <= 0.0:
+        raise ValueError("No se puede imponer eta_opt,ef porque el producto óptico restante es nulo.")
+    rho = float(target) / rest
+    if not (0.0 < rho <= 1.0 + 1e-12):
+        raise ValueError(
+            f"eta_opt,ef={target:.5f} exigiría reflectividad={rho:.5f}, fuera de (0,1]."
+        )
+    optics["reflectivity"] = float(np.clip(rho, 1e-8, 1.0))
+
+
+def _inverse_parameter_registry(
+    representative_cfg: Mapping[str, Any],
+    fluid_database: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Parámetros candidatos con límites físicos explícitos."""
+    cfg = deepcopy(representative_cfg)
+    eta_nom = _effective_optical_efficiency(cfg)
+    optics = cfg["optics"]
+    absorber = cfg["materials"]["absorber"]
+    optical_rest = (
+        float(optics["intercept_factor"])
+        * float(absorber["alpha"])
+        * float(optics.get("dirt_factor", 1.0))
+        * float(optics.get("shade_factor", 1.0))
+    )
+    if bool(cfg["model"].get("has_glass", False)):
+        optical_rest *= float(cfg["materials"]["glass"]["tau"])
+    eta_upper = min(0.999999 * optical_rest, 0.999999)
+    eta_lower = max(0.05, min(eta_nom * 0.45, eta_upper * 0.75))
+
+    fluid_name = str(cfg["operation"]["fluid"])
+    db_entry = fluid_database.get(fluid_name, {})
+    multipliers = db_entry.get("multipliers", {}) if isinstance(db_entry, Mapping) else {}
+
+    registry: dict[str, dict[str, Any]] = {
+        "eta_opt_eff": {
+            "label": "η óptica efectiva (ρ·γ·τ·α…)",
+            "category": "Óptica",
+            "nominal": eta_nom,
+            "bounds": (eta_lower, eta_upper),
+            "status": "Producto efectivo; evita separar factores ópticos no identificables individualmente.",
+        },
+        "eps_abs": {
+            "label": "Emisividad del absorbedor εabs",
+            "category": "Radiación",
+            "nominal": float(cfg["materials"]["absorber"]["eps"]),
+            "bounds": (0.05, 0.99),
+            "status": "Ajustable solo si su valor documental es incierto o se estudia sensibilidad.",
+        },
+        "wind_m_s": {
+            "label": "Velocidad de viento",
+            "category": "Ambiente",
+            "nominal": float(cfg["environment"]["wind_m_s"]),
+            "bounds": (0.0, 12.0),
+            "status": "En Rea Quille no está tabulada en las tablas mensuales; en Bhambare está publicada.",
+        },
+        "support_loss_fraction": {
+            "label": "Fracción de pérdida por soportes",
+            "category": "Pérdidas",
+            "nominal": float(cfg["model"].get("support_loss_fraction", 0.015))
+            if bool(cfg["model"].get("include_supports", False))
+            else 0.0,
+            "bounds": (0.0, 0.08),
+            "status": "Parámetro diagnóstico de pérdida adicional; no debe usarse como factor de ajuste arbitrario.",
+        },
+    }
+    if bool(cfg["model"].get("has_glass", False)):
+        registry["eps_glass"] = {
+            "label": "Emisividad del vidrio εvid",
+            "category": "Radiación",
+            "nominal": float(cfg["materials"]["glass"]["eps"]),
+            "bounds": (0.50, 0.99),
+            "status": "Cubierta de vidrio; relevante al intercambio absorbedor–vidrio y a pérdidas exteriores.",
+        }
+    if str(cfg["environment"].get("sky_model", "")) == "rea_quille":
+        registry["dew_point_C"] = {
+            "label": "Punto de rocío Tdp",
+            "category": "Cielo",
+            "nominal": float(cfg["environment"].get("dew_point_C", 15.0)),
+            "bounds": (-5.0, 30.0),
+            "status": "No publicado en las tablas mensuales de Rea Quille; hipótesis del preset.",
+        }
+    else:
+        registry["sky_delta_K"] = {
+            "label": "ΔT cielo = Tamb − Tsky",
+            "category": "Cielo",
+            "nominal": float(cfg["environment"].get("sky_delta_K", 6.0)),
+            "bounds": (0.0, 25.0),
+            "status": "Parámetro del modelo simplificado de cielo.",
+        }
+
+    for key, label, bounds in (
+        ("Cp", "Multiplicador Cp del HTF", (0.80, 1.20)),
+        ("mu", "Multiplicador μ del HTF", (0.60, 1.40)),
+        ("k", "Multiplicador k del HTF", (0.75, 1.25)),
+    ):
+        if key in multipliers:
+            registry[f"fluid_{key}"] = {
+                "label": label,
+                "category": "Propiedades HTF",
+                "nominal": float(multipliers[key]),
+                "bounds": bounds,
+                "status": "Útil si las propiedades del fluido no están completamente documentadas.",
+            }
+    return registry
+
+
+def inverse_parameter_options(
+    case: str,
+    fluid_database: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Expone al UI los parámetros disponibles para cada familia de validación."""
+    key = str(case).strip().lower()
+    if key == "bhambare":
+        cfg, _ = build_bhambare_sukhatme_preset()
+    elif key == "rea_foz":
+        cfg, _ = build_rea_monthly_preset("Foz do Iguaçu", 1)
+    elif key == "rea_alvorada":
+        cfg, _ = build_rea_monthly_preset("Alvorada do Norte", 1)
+    elif key == "rea_prototype":
+        cfg, _ = build_rea_prototype_preset()
+    else:
+        raise ValueError(f"Caso inverso desconocido: {case}")
+    return _inverse_parameter_registry(cfg, fluid_database)
+
+
+def _apply_inverse_parameters(
+    cfg: dict[str, Any],
+    db: dict[str, Any],
+    parameter_ids: Sequence[str],
+    values: Sequence[float],
+) -> None:
+    for pid, raw_value in zip(parameter_ids, values):
+        value = float(raw_value)
+        if pid == "eta_opt_eff":
+            _set_effective_optical_efficiency(cfg, value)
+        elif pid == "eps_abs":
+            cfg["materials"]["absorber"]["eps"] = value
+        elif pid == "eps_glass":
+            cfg["materials"]["glass"]["eps"] = value
+        elif pid == "wind_m_s":
+            cfg["environment"]["wind_m_s"] = value
+        elif pid == "dew_point_C":
+            cfg["environment"]["dew_point_C"] = value
+        elif pid == "sky_delta_K":
+            cfg["environment"]["sky_delta_K"] = value
+        elif pid == "support_loss_fraction":
+            cfg["model"]["support_loss_fraction"] = value
+            cfg["model"]["include_supports"] = bool(value > 1e-12)
+        elif pid.startswith("fluid_"):
+            prop = pid.split("_", 1)[1]
+            fluid_name = str(cfg["operation"]["fluid"])
+            db[fluid_name]["multipliers"][prop] = value
+        else:
+            raise ValueError(f"Parámetro inverso no soportado: {pid}")
+
+
+def _prepare_inverse_cfg(cfg: dict[str, Any], *, fast: bool = False) -> None:
+    """Configura la integración del inverso.
+
+    Durante la búsqueda se usa N=6 y max_step=600 s; la propia sensibilidad
+    espacial mostró error <0.5 % a N=6. La revalidación final vuelve a la malla
+    documental del preset (normalmente N=12).
+    """
+    cfg["solver"]["method"] = "BDF"
+    cfg["solver"]["rtol"] = min(float(cfg["solver"].get("rtol", 1e-6)), 1e-6)
+    cfg["solver"]["atol"] = min(float(cfg["solver"].get("atol", 1e-7)), 1e-7)
+    if fast:
+        cfg["geometry"]["Nseg"] = min(int(cfg["geometry"].get("Nseg", 12)), 6)
+        cfg["solver"]["max_step_s"] = 600.0
+        cfg["operation"]["output_step_s"] = 600.0
+    else:
+        cfg["solver"]["max_step_s"] = max(float(cfg["solver"].get("max_step_s", 20.0)), 120.0)
+        cfg["operation"]["output_step_s"] = max(float(cfg["operation"].get("output_step_s", 60.0)), 300.0)
+
+
+def _bhambare_inverse_evaluation(
+    x: Sequence[float],
+    parameter_ids: Sequence[str],
+    fluid_database: Mapping[str, Mapping[str, Any]],
+    *, fast: bool = False,
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    cfg, reference = _bhambare_reference_bundle(fluid_database)
+    cfg = deepcopy(cfg)
+    db = deepcopy(fluid_database)
+    _prepare_inverse_cfg(cfg, fast=fast)
+    _apply_inverse_parameters(cfg, db, parameter_ids, x)
+    result = PTCSimulator(cfg, db).simulate()
+    metrics = _final_metrics(result)
+    residuals = np.asarray(
+        [
+            (metrics["Tout_C"] - reference["Tout_C"]) / max(abs(reference["Tout_C"]), 1.0),
+            (metrics["Tabs_K"] - reference["Tabs_K"]) / max(abs(reference["Tabs_K"]), 1.0),
+            (metrics["Tvid_K"] - reference["Tvid_K"]) / max(abs(reference["Tvid_K"]), 1.0),
+            (metrics["Qloss_W"] - reference["Qloss_W"]) / max(abs(reference["Qloss_W"]), 1.0),
+        ],
+        dtype=float,
+    )
+    rows = [
+        {
+            "Conjunto": "calibración",
+            "Caso": "Bhambare / Sukhatme",
+            "Magnitud": name,
+            "Referencia": float(reference[key]),
+            "Modelo": float(metrics[key]),
+            "Error_rel_pct": _relative_error(metrics[key], reference[key]),
+            "Residual_obj": (float(metrics[key]) - float(reference[key])) / max(abs(float(reference[key])), 1.0),
+        }
+        for name, key in (
+            ("Tout_C", "Tout_C"),
+            ("Tabs_K", "Tabs_K"),
+            ("Tvid_K", "Tvid_K"),
+            ("Qloss_W", "Qloss_W"),
+        )
+    ]
+    return residuals, rows
+
+
+def _rea_month_indices(strategy: str) -> tuple[list[int], list[int]]:
+    mode = str(strategy).strip().lower()
+    if mode == "all":
+        return list(range(12)), []
+    if mode == "alternating":
+        # Cuatro puntos estacionales para identificar; ocho meses quedan totalmente fuera del ajuste.
+        train = [0, 3, 6, 9]  # Ene, Abr, Jul, Oct
+        return train, [i for i in range(12) if i not in train]
+    raise ValueError(f"Estrategia mensual desconocida: {strategy}")
+
+
+def _rea_monthly_inverse_evaluation(
+    city: str,
+    x: Sequence[float],
+    parameter_ids: Sequence[str],
+    fluid_database: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+    return_all: bool = False,
+    fast: bool = False,
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    city_key = city.strip().lower()
+    if city_key.startswith("foz"):
+        data = REA_FOZ_MONTHLY
+        city_name = "Foz do Iguaçu"
+    else:
+        data = REA_ALVORADA_MONTHLY
+        city_name = "Alvorada do Norte"
+    train_idx, validation_idx = _rea_month_indices(strategy)
+    indices = list(range(12)) if return_all else train_idx
+    residuals: list[float] = []
+    rows: list[dict[str, Any]] = []
+    for i in indices:
+        cfg, _ = build_rea_monthly_preset(city_name, i + 1)
+        db = deepcopy(fluid_database)
+        _prepare_inverse_cfg(cfg, fast=fast)
+        _apply_inverse_parameters(cfg, db, parameter_ids, x)
+        result = PTCSimulator(cfg, db).simulate()
+        k = len(result.t_s) - 1
+        tout = float(result.Tout_C[k])
+        eta = float(result.scalar_diag["eta_pct"][k])
+        tout_ref = float(data["Tout_ref_C"][i])
+        tin_ref = float(data["Tin_C"][i])
+        eta_ref = float(data["eta_ref_pct"][i])
+        dT_ref = tout_ref - tin_ref
+        dT_sim = tout - tin_ref
+        if not return_all or i in train_idx:
+            residuals.extend(
+                [
+                    (dT_sim - dT_ref) / max(abs(dT_ref), 1.0),
+                    (eta - eta_ref) / max(abs(eta_ref), 1.0),
+                ]
+            )
+        rows.extend(
+            [
+                {
+                    "Conjunto": "calibración" if i in train_idx else "validación",
+                    "Caso": MONTH_ABBR_ES[i],
+                    "Magnitud": "Tout_C",
+                    "Referencia": tout_ref,
+                    "Modelo": tout,
+                    "Error_rel_pct": _relative_error(tout, tout_ref),
+                    "Residual_obj": (dT_sim - dT_ref) / max(abs(dT_ref), 1.0),
+                },
+                {
+                    "Conjunto": "calibración" if i in train_idx else "validación",
+                    "Caso": MONTH_ABBR_ES[i],
+                    "Magnitud": "Eta_pct",
+                    "Referencia": eta_ref,
+                    "Modelo": eta,
+                    "Error_rel_pct": _relative_error(eta, eta_ref),
+                    "Residual_obj": (eta - eta_ref) / max(abs(eta_ref), 1.0),
+                },
+            ]
+        )
+    return np.asarray(residuals, dtype=float), rows
+
+
+def _rea_prototype_inverse_evaluation(
+    x: Sequence[float],
+    parameter_ids: Sequence[str],
+    fluid_database: Mapping[str, Mapping[str, Any]],
+    *, fast: bool = False,
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    cfg, _ = build_rea_prototype_preset()
+    db = deepcopy(fluid_database)
+    _prepare_inverse_cfg(cfg, fast=fast)
+    _apply_inverse_parameters(cfg, db, parameter_ids, x)
+    result = PTCSimulator(cfg, db).simulate()
+    hours = np.asarray(REA_PROTOTYPE_HOURS["hours"], dtype=float)
+    eta_ref = np.asarray(REA_PROTOTYPE_HOURS["eta_exp_pct"], dtype=float)
+    eta_model = np.asarray(
+        [float(result.scalar_diag["eta_pct"][_nearest_index(result.LAT_h, hour)]) for hour in hours],
+        dtype=float,
+    )
+    residuals = (eta_model - eta_ref) / np.maximum(np.abs(eta_ref), 1.0)
+    rows = [
+        {
+            "Conjunto": "calibración exploratoria",
+            "Caso": f"{int(hour):02d}:00",
+            "Magnitud": "Eta_pct",
+            "Referencia": float(ref),
+            "Modelo": float(sim),
+            "Error_rel_pct": _relative_error(sim, ref),
+            "Residual_obj": (float(sim) - float(ref)) / max(abs(float(ref)), 1.0),
+        }
+        for hour, ref, sim in zip(hours, eta_ref, eta_model)
+    ]
+    return residuals, rows
+
+
+def _score_from_residuals(residuals: Sequence[float]) -> float:
+    arr = np.asarray(residuals, dtype=float)
+    return 100.0 * float(np.sqrt(np.mean(np.square(arr)))) if arr.size else float("nan")
+
+
+def calibrate_inverse_model(
+    case: str,
+    fluid_database: Mapping[str, Mapping[str, Any]],
+    parameter_ids: Sequence[str],
+    *,
+    monthly_strategy: str = "alternating",
+    max_nfev: int = 28,
+) -> dict[str, Any]:
+    """Identificación multiparámetro acotada y revalidación posterior.
+
+    ``case``: bhambare | rea_foz | rea_alvorada | rea_prototype.
+    Para Rea mensual, ``alternating`` reserva seis meses como hold-out; ``all``
+    usa los doce puntos para calibración y no constituye validación independiente.
+    """
+    case_key = str(case).strip().lower()
+    if not parameter_ids:
+        raise ValueError("Seleccione al menos un parámetro para identificar.")
+
+    if case_key == "bhambare":
+        representative_cfg, _ = build_bhambare_sukhatme_preset()
+    elif case_key == "rea_foz":
+        representative_cfg, _ = build_rea_monthly_preset("Foz do Iguaçu", 1)
+    elif case_key == "rea_alvorada":
+        representative_cfg, _ = build_rea_monthly_preset("Alvorada do Norte", 1)
+    elif case_key == "rea_prototype":
+        representative_cfg, _ = build_rea_prototype_preset()
+    else:
+        raise ValueError(f"Caso inverso desconocido: {case}")
+
+    registry = _inverse_parameter_registry(representative_cfg, fluid_database)
+    unknown = [pid for pid in parameter_ids if pid not in registry]
+    if unknown:
+        raise ValueError(f"Parámetros no disponibles para este caso: {unknown}")
+    if case_key == "bhambare" and len(parameter_ids) > 4:
+        raise ValueError("Bhambare aporta cuatro magnitudes independientes; use como máximo cuatro parámetros simultáneos.")
+
+    x0 = np.asarray([float(registry[pid]["nominal"]) for pid in parameter_ids], dtype=float)
+    lower = np.asarray([float(registry[pid]["bounds"][0]) for pid in parameter_ids], dtype=float)
+    upper = np.asarray([float(registry[pid]["bounds"][1]) for pid in parameter_ids], dtype=float)
+    x0 = np.minimum(np.maximum(x0, lower + 1e-10), upper - 1e-10)
+
+    cache: dict[tuple[float, ...], tuple[np.ndarray, list[dict[str, Any]]]] = {}
+
+    def evaluate(x: Sequence[float], *, full: bool = False, fast: bool = False):
+        key = tuple(np.round(np.asarray(x, dtype=float), 10)) + ((1.0,) if full else (0.0,), (1.0,) if fast else (0.0,))
+        if key in cache:
+            return cache[key]
+        if case_key == "bhambare":
+            out = _bhambare_inverse_evaluation(x, parameter_ids, fluid_database, fast=fast)
+        elif case_key == "rea_foz":
+            out = _rea_monthly_inverse_evaluation(
+                "Foz do Iguaçu", x, parameter_ids, fluid_database, monthly_strategy, return_all=full, fast=fast
+            )
+        elif case_key == "rea_alvorada":
+            out = _rea_monthly_inverse_evaluation(
+                "Alvorada do Norte", x, parameter_ids, fluid_database, monthly_strategy, return_all=full, fast=fast
+            )
+        else:
+            out = _rea_prototype_inverse_evaluation(x, parameter_ids, fluid_database, fast=fast)
+        cache[key] = out
+        return out
+
+    started = perf_counter()
+    result = least_squares(
+        lambda x: evaluate(x, full=False, fast=True)[0],
+        x0=x0,
+        bounds=(lower, upper),
+        method="trf",
+        jac="2-point",
+        x_scale="jac",
+        loss="linear",
+        max_nfev=int(max(6, max_nfev)),
+        ftol=1e-7,
+        xtol=1e-7,
+        gtol=1e-7,
+    )
+    elapsed_s = perf_counter() - started
+    xopt = np.asarray(result.x, dtype=float)
+    # Revalidación final a resolución completa (N del preset).
+    residual0, rows0 = evaluate(x0, full=(case_key in {"rea_foz", "rea_alvorada"}), fast=False)
+    residual_opt, rows_opt = evaluate(xopt, full=(case_key in {"rea_foz", "rea_alvorada"}), fast=False)
+    score0 = _score_from_residuals(residual0)
+    score_opt = _score_from_residuals(residual_opt)
+
+    # Identificabilidad local por valores singulares del Jacobiano escalado.
+    jac = np.asarray(result.jac, dtype=float)
+    singular_values = np.linalg.svd(jac, compute_uv=False) if jac.size else np.asarray([], dtype=float)
+    if singular_values.size and singular_values[-1] > np.finfo(float).eps:
+        condition_number = float(singular_values[0] / singular_values[-1])
+    elif singular_values.size:
+        condition_number = float("inf")
+    else:
+        condition_number = float("nan")
+    jac_rank = int(np.linalg.matrix_rank(jac)) if jac.size else 0
+
+    param_rows: list[dict[str, Any]] = []
+    for pid, start, value, lo, hi in zip(parameter_ids, x0, xopt, lower, upper):
+        span = hi - lo
+        boundary_distance = min(value - lo, hi - value) / span if span > 0 else 0.0
+        param_rows.append(
+            {
+                "ID": pid,
+                "Parametro": registry[pid]["label"],
+                "Categoria": registry[pid]["category"],
+                "Nominal": float(start),
+                "Identificado": float(value),
+                "Cambio_pct": 100.0 * (float(value) - float(start)) / max(abs(float(start)), 1e-12),
+                "Limite_inf": float(lo),
+                "Limite_sup": float(hi),
+                "Cerca_del_limite": bool(boundary_distance < 0.03),
+                "Estado_fuente": registry[pid]["status"],
+            }
+        )
+    parameter_table = pd.DataFrame(param_rows)
+
+    predictions_before = pd.DataFrame(rows0)
+    predictions_after = pd.DataFrame(rows_opt)
+
+    def subset_score(table: pd.DataFrame, subset: str) -> float:
+        part = table.loc[table["Conjunto"] == subset]
+        if part.empty:
+            return float("nan")
+        if "Residual_obj" in part.columns:
+            return _score_from_residuals(part["Residual_obj"].to_numpy(float))
+        rel = (part["Modelo"].to_numpy(float) - part["Referencia"].to_numpy(float)) / np.maximum(
+            np.abs(part["Referencia"].to_numpy(float)), 1.0
+        )
+        return _score_from_residuals(rel)
+
+    # Las tablas mensuales incluyen hold-out; estos scores son descriptivos sobre
+    # magnitudes reportadas. El score de optimización usa ΔT y eta para evitar que
+    # Tout absoluto oculte el error térmico.
+    validation_summary: dict[str, float] = {}
+    if case_key in {"rea_foz", "rea_alvorada"} and str(monthly_strategy).lower() == "alternating":
+        validation_summary = {
+            "holdout_score_before_pct": subset_score(predictions_before, "validación"),
+            "holdout_score_after_pct": subset_score(predictions_after, "validación"),
+        }
+
+    near_bound = bool(parameter_table["Cerca_del_limite"].any()) if not parameter_table.empty else False
+    physically_admissible = bool(np.all(xopt >= lower) and np.all(xopt <= upper))
+    identifiable = bool(jac_rank == len(parameter_ids) and np.isfinite(condition_number) and condition_number < 1e6)
+
+    notes: list[str] = []
+    if case_key == "bhambare":
+        notes.append(
+            "Bhambare/Sukhatme usa el mismo caso para identificación y comprobación; por tanto, el ajuste es calibración y no validación independiente."
+        )
+    elif case_key in {"rea_foz", "rea_alvorada"}:
+        if str(monthly_strategy).lower() == "alternating":
+            notes.append(
+                "Enero, abril, julio y octubre se usan para identificar; los otros ocho meses quedan como hold-out y no participan del ajuste."
+            )
+        else:
+            notes.append(
+                "Se usaron los 12 meses para calibrar; el resultado mide ajuste global, no capacidad predictiva fuera de muestra."
+            )
+    else:
+        notes.append(
+            "Tabela 8 no publica Tin/Tout horarios. Esta identificación es exploratoria porque mantiene Tin=25 °C como hipótesis del preset."
+        )
+    if near_bound:
+        notes.append(
+            "Al menos un parámetro quedó a menos del 3 % de un límite físico impuesto; esto sugiere revisar la estructura del modelo o ampliar evidencia documental antes de aceptar el ajuste."
+        )
+    if not identifiable:
+        notes.append(
+            "El Jacobiano indica identificación débil o correlación fuerte entre parámetros; no interprete los valores individuales como únicos aunque el ajuste mejore."
+        )
+
+    return {
+        "case": case_key,
+        "parameter_table": parameter_table,
+        "predictions_before": predictions_before,
+        "predictions_after": predictions_after,
+        "score_before_pct": float(score0),
+        "score_after_pct": float(score_opt),
+        "improvement_pp": float(score0 - score_opt),
+        "success": bool(result.success),
+        "message": str(result.message),
+        "nfev": int(result.nfev),
+        "cpu_s": float(elapsed_s),
+        "condition_number": condition_number,
+        "jacobian_rank": jac_rank,
+        "n_parameters": len(parameter_ids),
+        "physically_admissible": physically_admissible,
+        "locally_identifiable": identifiable,
+        "validation_summary": validation_summary,
+        "notes": notes,
     }

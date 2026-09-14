@@ -23,6 +23,8 @@ from validations import (
     analyze_bhambare_numerical_convergence,
     analyze_bhambare_physical_sensitivity,
     compare_bhambare_solvers,
+    calibrate_inverse_model,
+    inverse_parameter_options,
     prototype_tcc_table,
     validate_active_preset,
     validate_bhambare,
@@ -1246,6 +1248,172 @@ with tab_sensitivity:
             f"Mayor capacidad local de reducir la discrepancia: {top['Parametro']} "
             f"({top['Mejor_direccion']}10 %), con una reducción del score de "
             f"{top['Mejora_score_pp']:.2f} puntos. Esto identifica sensibilidad, no autoriza calibrar el parámetro fuera de su valor físico/documental."
+        )
+
+    st.divider()
+    st.subheader("3 · Identificación multiparámetro (modelo inverso)")
+    st.write(
+        "Busca simultáneamente un conjunto de parámetros dentro de límites físicos y vuelve a ejecutar la validación. "
+        "Los factores ópticos correlacionados se agrupan como η óptica efectiva para evitar atribuir a ρ, γ, τ o α una unicidad que los datos no permiten demostrar."
+    )
+
+    inverse_case_labels = {
+        "Bhambare / Sukhatme — Table 4": "bhambare",
+        "Rea Quille — Foz do Iguaçu — Tabela 10": "rea_foz",
+        "Rea Quille — Alvorada do Norte — Tabela 11": "rea_alvorada",
+        "Rea Quille / Fiamonzini — prototipo — Tabela 8 (exploratorio)": "rea_prototype",
+    }
+    inverse_case_label = st.selectbox(
+        "Conjunto documental",
+        list(inverse_case_labels.keys()),
+        key="inverse_case_selector",
+    )
+    inverse_case = inverse_case_labels[inverse_case_label]
+    registry = inverse_parameter_options(inverse_case, fluid_db)
+    label_to_id = {spec["label"]: pid for pid, spec in registry.items()}
+
+    default_ids_by_case = {
+        "bhambare": ["eta_opt_eff", "eps_abs", "eps_glass"],
+        "rea_foz": ["eta_opt_eff", "wind_m_s"],
+        "rea_alvorada": ["eta_opt_eff", "wind_m_s"],
+        "rea_prototype": ["eta_opt_eff", "wind_m_s"],
+    }
+    default_labels = [registry[pid]["label"] for pid in default_ids_by_case[inverse_case] if pid in registry]
+    selected_labels = st.multiselect(
+        "Parámetros a identificar",
+        list(label_to_id.keys()),
+        default=default_labels,
+        key=f"inverse_parameters_{inverse_case}",
+        help="Use pocos parámetros y priorice los inciertos. Parámetros publicados deberían permanecer fijos salvo que el objetivo sea una prueba explícita de sensibilidad.",
+    )
+    selected_ids = [label_to_id[label] for label in selected_labels]
+
+    parameter_preview = pd.DataFrame(
+        [
+            {
+                "Parametro": registry[pid]["label"],
+                "Nominal": registry[pid]["nominal"],
+                "Limite_inf": registry[pid]["bounds"][0],
+                "Limite_sup": registry[pid]["bounds"][1],
+                "Observacion": registry[pid]["status"],
+            }
+            for pid in selected_ids
+        ]
+    )
+    if not parameter_preview.empty:
+        st.dataframe(parameter_preview, use_container_width=True, hide_index=True)
+
+    inv_controls = st.columns([1.35, 1.0, 1.0])
+    monthly_strategy = "alternating"
+    if inverse_case in {"rea_foz", "rea_alvorada"}:
+        strategy_label = inv_controls[0].selectbox(
+            "Estrategia de calibración",
+            [
+                "4 meses calibración + 8 meses hold-out",
+                "Usar los 12 meses para calibrar",
+            ],
+            key=f"inverse_strategy_{inverse_case}",
+        )
+        monthly_strategy = "alternating" if strategy_label.startswith("4 meses") else "all"
+    else:
+        inv_controls[0].caption(
+            "Bhambare no tiene un segundo caso independiente; Tabela 8 es exploratoria porque Tin horario no fue publicado."
+            if inverse_case in {"bhambare", "rea_prototype"}
+            else ""
+        )
+
+    max_nfev = inv_controls[1].slider(
+        "Máx. evaluaciones",
+        min_value=8,
+        max_value=60,
+        value=16,
+        step=2,
+        key=f"inverse_nfev_{inverse_case}",
+    )
+    inv_controls[2].metric("Parámetros libres", len(selected_ids))
+
+    if st.button(
+        "Ejecutar identificación multiparámetro",
+        type="primary",
+        use_container_width=True,
+        disabled=(len(selected_ids) == 0),
+        key="run_inverse_calibration",
+    ):
+        try:
+            with st.spinner(
+                "Resolviendo el problema inverso con límites físicos y reejecutando la validación. "
+                "Los casos mensuales pueden tardar más porque cada evaluación ejecuta varios meses..."
+            ):
+                st.session_state.validations["inverse_calibration"] = calibrate_inverse_model(
+                    inverse_case,
+                    fluid_db,
+                    selected_ids,
+                    monthly_strategy=monthly_strategy,
+                    max_nfev=max_nfev,
+                )
+        except Exception as exc:
+            st.exception(exc)
+
+    if "inverse_calibration" in st.session_state.validations and st.session_state.validations["inverse_calibration"].get("case") == inverse_case:
+        inv = st.session_state.validations["inverse_calibration"]
+        st.markdown("#### Resultado del modelo inverso")
+        m = st.columns(6)
+        m[0].metric("Score inicial", f"{inv['score_before_pct']:.2f} %")
+        m[1].metric("Score identificado", f"{inv['score_after_pct']:.2f} %", delta=f"{-inv['improvement_pp']:.2f} pp")
+        m[2].metric("Evaluaciones", str(inv["nfev"]))
+        m[3].metric("Tiempo", f"{inv['cpu_s']:.1f} s")
+        m[4].metric("Rango Jacobiano", f"{inv['jacobian_rank']}/{inv['n_parameters']}")
+        cond = inv["condition_number"]
+        m[5].metric("Condición J", f"{cond:.2e}" if np.isfinite(cond) else "∞")
+
+        if inv["success"] and inv["physically_admissible"]:
+            st.success("El optimizador terminó dentro de los límites físicos impuestos.")
+        else:
+            st.warning(f"El ajuste no terminó de forma plenamente satisfactoria: {inv['message']}")
+        if not inv["locally_identifiable"]:
+            st.warning(
+                "La identificación local es débil: el Jacobiano tiene rango insuficiente o está mal condicionado. "
+                "El ajuste puede reproducir los datos sin que los valores individuales de los parámetros sean únicos."
+            )
+
+        st.markdown("**Parámetros identificados**")
+        st.dataframe(inv["parameter_table"], use_container_width=True, hide_index=True)
+
+        before = inv["predictions_before"].copy().rename(
+            columns={"Modelo": "Modelo_inicial", "Error_rel_pct": "Error_inicial_pct", "Residual_obj": "Residual_inicial"}
+        )
+        after = inv["predictions_after"].copy().rename(
+            columns={"Modelo": "Modelo_identificado", "Error_rel_pct": "Error_identificado_pct", "Residual_obj": "Residual_identificado"}
+        )
+        keys = ["Conjunto", "Caso", "Magnitud", "Referencia"]
+        comparison = before.merge(after, on=keys, how="outer")
+        st.markdown("**Reejecución de las referencias con los parámetros encontrados**")
+        st.dataframe(comparison, use_container_width=True, hide_index=True)
+
+        holdout = inv.get("validation_summary", {})
+        if holdout:
+            h = st.columns(2)
+            h[0].metric("Hold-out antes", f"{holdout['holdout_score_before_pct']:.2f} %")
+            h[1].metric(
+                "Hold-out después",
+                f"{holdout['holdout_score_after_pct']:.2f} %",
+                delta=f"{holdout['holdout_score_after_pct'] - holdout['holdout_score_before_pct']:+.2f} pp",
+                delta_color="inverse",
+            )
+
+        for note in inv["notes"]:
+            st.caption(note)
+
+        export_inverse = io.BytesIO()
+        with pd.ExcelWriter(export_inverse, engine="openpyxl") as writer:
+            inv["parameter_table"].to_excel(writer, sheet_name="Parametros", index=False)
+            comparison.to_excel(writer, sheet_name="Comparacion", index=False)
+        st.download_button(
+            "Descargar identificación multiparámetro · XLSX",
+            data=export_inverse.getvalue(),
+            file_name=f"ptc_modelo_inverso_{inv['case']}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
         )
 
 with tab_report:

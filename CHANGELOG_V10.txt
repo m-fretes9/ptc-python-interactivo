@@ -1,0 +1,16 @@
+V10 — Identificación multiparámetro / modelo inverso
+
+- Nueva sección 3 en la pestaña Sensibilidad.
+- Selector de referencia:
+  * Bhambare / Sukhatme — Table 4.
+  * Rea Quille — Foz do Iguaçu — Tabela 10.
+  * Rea Quille — Alvorada do Norte — Tabela 11.
+  * Rea Quille / Fiamonzini — prototipo — Tabela 8 (exploratorio).
+- Optimización acotada con scipy.optimize.least_squares.
+- Factor óptico efectivo agrupado para evitar intentar separar rho/gamma/tau/alpha sin identificabilidad suficiente.
+- Parámetros opcionales: emisividades, viento, Tdp / Tsky, pérdidas de soportes y multiplicadores de propiedades HTF.
+- Para Rea mensual: opción 4 meses de calibración (Ene/Abr/Jul/Oct) + 8 meses hold-out, o los 12 meses para ajuste global.
+- Diagnóstico de identificabilidad mediante rango y número de condición del Jacobiano.
+- Flags de parámetros próximos a límites físicos.
+- Revalidación final a N completo después de una búsqueda acelerada a N=6.
+- Exportación XLSX con parámetros identificados y comparación antes/después.
