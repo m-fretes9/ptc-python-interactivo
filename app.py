@@ -84,6 +84,16 @@ def initialize_state() -> None:
     if "ray_seed" not in st.session_state:
         st.session_state.ray_seed = 0
 
+    # Streamlit no permite modificar el estado de un widget después de que
+    # ese widget ya fue instanciado en el mismo rerun. Las acciones que
+    # necesitan cambiar selectores del sidebar dejan aquí una actualización
+    # pendiente, que se consume al inicio del rerun siguiente, antes de
+    # crear los widgets.
+    pending_widget_state = st.session_state.pop("_pending_widget_state", None)
+    if isinstance(pending_widget_state, dict):
+        for key, value in pending_widget_state.items():
+            st.session_state[key] = value
+
 
 def integrate_trapezoid(y: np.ndarray, x: np.ndarray) -> float:
     """Integra por la regla trapezoidal con NumPy 2.x / Python 3.14."""
@@ -1279,9 +1289,13 @@ with tab_validation:
         apply_reference_preset(
             "rea_prototype", variant=proto_mode, dni_source=proto_dni_source
         )
-        st.session_state.preset_family_selector = "rea_prototype"
-        st.session_state.preset_prototype_mode_selector = proto_mode
-        st.session_state.preset_prototype_dni_source = proto_dni_source
+        # No escribir directamente en las keys de widgets ya instanciados.
+        # Se aplican al comienzo del próximo rerun (initialize_state).
+        st.session_state["_pending_widget_state"] = {
+            "preset_family_selector": "rea_prototype",
+            "preset_prototype_mode_selector": proto_mode,
+            "preset_prototype_dni_source": proto_dni_source,
+        }
         st.rerun()
 
     template = prototype_user_export_template()

@@ -1,0 +1,7 @@
+PTC Python Interactivo V11.1
+
+Corrección de Streamlit Session State:
+- Corrige StreamlitWidgetAlreadyInstantiatedError al usar "Aplicar este modo al simulador".
+- Las claves de widgets del preset ya no se modifican después de crear los widgets.
+- Se usa un estado pendiente (_pending_widget_state) que se consume al inicio del siguiente rerun.
+- Mantiene sin cambios la lógica física, validaciones, presets y template CSV de V11.

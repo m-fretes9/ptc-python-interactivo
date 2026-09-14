@@ -1,0 +1,9 @@
+[
+  "tests/test_inverse_validation.py::test_glass_emissivity_only_available_with_glass_case",
+  "tests/test_inverse_validation.py::test_inverse_parameter_options_cover_all_documental_cases",
+  "tests/test_rea_prototype_modes.py::test_physical_fixed_mode_changes_incidence_hourly",
+  "tests/test_rea_prototype_modes.py::test_trnsys_published_optics_are_nominal",
+  "tests/test_rea_prototype_modes.py::test_user_csv_template_is_exact_and_validation_runs",
+  "tests/test_solver_methods_and_radiation.py::test_factored_fourth_power_difference_matches_direct",
+  "tests/test_solver_methods_and_radiation.py::test_rk45_and_bdf_agree_on_small_case"
+]
