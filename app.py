@@ -27,6 +27,8 @@ from validations import (
     inverse_parameter_options,
     identified_parameter_template,
     apply_identified_parameter_template,
+    bhambare_user_inverse_template,
+    validate_bhambare_mode,
     prototype_tcc_table,
     prototype_user_export_template,
     validate_rea_prototype_mode,
@@ -1202,6 +1204,112 @@ with tab_validation:
             file_name="bhambare_sukhatme_comparacion_solvers.csv",
             mime="text/csv",
             use_container_width=True,
+        )
+
+    st.divider()
+    st.subheader("Bhambare / Sukhatme — validación por objetivo")
+    st.write(
+        "Permite cuantificar los errores del caso Bhambare con el mismo criterio explícito usado en Rea Quille. "
+        "Como Tout, Tabs, Tvid y Q pérdidas tienen unidades distintas, las métricas globales usan residuos relativos normalizados."
+    )
+    bh_target_labels = {
+        "sukhatme": "Sukhatme & Nayak · referencia",
+        "bhambare": "Bhambare · modelo publicado",
+        "xlsx_initial": "Template XLSX · modelo inicial",
+        "xlsx_identified": "Template XLSX · modelo identificado",
+    }
+    bhc = st.columns([1.25, 1.15, 1.0])
+    bh_target = bhc[0].selectbox(
+        "Curva / vector objetivo",
+        list(bh_target_labels.keys()),
+        format_func=lambda key: bh_target_labels[key],
+        key="bhambare_validation_target_ui",
+    )
+    if bh_target == "xlsx_identified":
+        bh_parameter_template = "identified"
+        bh_spec = identified_parameter_template("bhambare")
+        bhc[1].metric("Parámetros", "Identificados")
+        bhc[1].caption(
+            f"ηopt,ef={bh_spec['eta_opt_eff']:.4f} · εabs={bh_spec['eps_abs']:.3f} · εvid={bh_spec['eps_glass']:.3f}"
+        )
+    else:
+        bh_parameter_template = bhc[1].selectbox(
+            "Parámetros del modelo",
+            ["nominal", "identified"],
+            format_func=lambda key: "Nominales" if key == "nominal" else "Identificados 14/09",
+            key="bhambare_parameter_template_ui",
+            help=(
+                "El template identificado proviene de ptc_modelo_inverso_bhambare.xlsx. "
+                "η óptica efectiva, εabs y εvid quedaron muy cerca de sus límites superiores."
+            ),
+        )
+    bhc[2].metric(
+        "Comparación",
+        "4 magnitudes",
+        help="Tout, temperatura del absorbedor, temperatura del vidrio y pérdidas térmicas.",
+    )
+
+    bh_actions = st.columns(2)
+    if bh_actions[0].button(
+        "Ejecutar validación Bhambare",
+        type="primary",
+        use_container_width=True,
+        key="run_bhambare_target_validation",
+    ):
+        try:
+            with st.spinner("Ejecutando Bhambare y calculando errores multivariables..."):
+                st.session_state.validations["bhambare_mode_validation"] = validate_bhambare_mode(
+                    fluid_db,
+                    target_key=bh_target,
+                    parameter_template=bh_parameter_template,
+                )
+        except Exception as exc:
+            st.exception(exc)
+
+    if bh_actions[1].button(
+        "Aplicar estos parámetros al simulador",
+        use_container_width=True,
+        key="apply_bhambare_template_to_simulator",
+    ):
+        apply_reference_preset("bhambare")
+        if bh_parameter_template == "identified":
+            apply_identified_parameter_template(st.session_state.config, "bhambare")
+        st.session_state["_pending_widget_state"] = {
+            "preset_family_selector": "bhambare",
+        }
+        st.rerun()
+
+    bh_template = bhambare_user_inverse_template()
+    with st.expander("Template XLSX incorporado · modelo inverso Bhambare 14/09/2026", expanded=False):
+        st.caption(bh_template["note"])
+        st.markdown("**Parámetros**")
+        st.dataframe(bh_template["parameter_table"], use_container_width=True, hide_index=True)
+        st.markdown("**Salidas guardadas**")
+        st.dataframe(bh_template["comparison_table"], use_container_width=True, hide_index=True)
+
+    if "bhambare_mode_validation" in st.session_state.validations:
+        bv = st.session_state.validations["bhambare_mode_validation"]
+        bm = bv["metrics"]
+        st.markdown(f"#### {bv['target_label']} · parámetros {bv['parameter_template']}")
+        bmc = st.columns(4)
+        bmc[0].metric("MAPE multivariable", f"{bm['MAPE_multivariable_pct']:.3f} %")
+        bmc[1].metric("RMS error relativo", f"{bm['RMSRE_pct']:.3f} %")
+        bmc[2].metric("Bias relativo medio", f"{bm['Bias_rel_medio_pct']:+.3f} %")
+        bmc[3].metric("Error máximo", f"{bm['Error_max_pct']:.3f} %")
+        if bv.get("applied_parameters", {}).get("near_bounds"):
+            st.warning(
+                "Los parámetros identificados utilizados en esta corrida están próximos al límite superior del espacio de búsqueda. "
+                "Una reducción del error no implica que esos valores sean necesariamente propiedades físicas reales."
+            )
+        st.caption(bv["note"])
+        st.dataframe(bv["table"], use_container_width=True, hide_index=True)
+        st.download_button(
+            "Descargar validación Bhambare · CSV",
+            data=bv["table"].to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"bhambare_{bv['target_key']}_{bv['parameter_template']}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="download_bhambare_mode_validation",
         )
 
     for key, title in (("rea_foz", "Rea Quille — Foz do Iguaçu — Tabela 10"), ("rea_alvorada", "Rea Quille — Alvorada do Norte — Tabela 11")):

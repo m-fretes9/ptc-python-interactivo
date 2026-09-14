@@ -397,7 +397,15 @@ def prototype_tcc_table() -> dict[str, Any]:
 
 
 
-REA_IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14: dict[str, dict[str, Any]] = {
+IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14: dict[str, dict[str, Any]] = {
+    "bhambare": {
+        "label": "Bhambare/Sukhatme · modelo inverso 14/09/2026",
+        "eta_opt_eff": 0.7671242147795794,
+        "eps_abs": 0.989999998086766,
+        "eps_glass": 0.9899999947177927,
+        "source": "ptc_modelo_inverso_bhambare.xlsx",
+        "near_bounds": ["eta_opt_eff", "eps_abs", "eps_glass"],
+    },
     "rea_foz": {
         "label": "Rea Quille · Foz · modelo inverso 14/09/2026",
         "eta_opt_eff": 0.5988709459872553,
@@ -418,12 +426,29 @@ REA_IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14: dict[str, dict[str, Any]] = {
     },
 }
 
+# Salidas exactas guardadas del XLSX entregado por el usuario. Se usan como
+# benchmark de regresión, no como una segunda fuente experimental.
+BHAMBARE_USER_INVERSE_2026_09_14: dict[str, dict[str, float]] = {
+    "initial": {
+        "Qloss_W": 693.8508069287897,
+        "Tabs_K": 450.4787451823364,
+        "Tout_C": 156.0717331741304,
+        "Tvid_K": 328.1041422446137,
+    },
+    "identified": {
+        "Qloss_W": 819.1450608851163,
+        "Tabs_K": 455.1953510611756,
+        "Tout_C": 157.125172030547,
+        "Tvid_K": 331.730769053495,
+    },
+}
+
 
 def identified_parameter_template(case: str) -> dict[str, Any]:
     key = str(case).strip().lower()
-    if key not in REA_IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14:
+    if key not in IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14:
         raise ValueError(f"No hay template identificado guardado para: {case}")
-    return deepcopy(REA_IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14[key])
+    return deepcopy(IDENTIFIED_PARAMETER_TEMPLATES_2026_09_14[key])
 
 
 def apply_identified_parameter_template(cfg: dict[str, Any], case: str) -> dict[str, Any]:
@@ -434,11 +459,206 @@ def apply_identified_parameter_template(cfg: dict[str, Any], case: str) -> dict[
     interpretarse como señal de compensación/identificabilidad, no como mediciones.
     """
     spec = identified_parameter_template(case)
-    _set_effective_optical_efficiency(cfg, float(spec["eta_opt_eff"]))
-    cfg["environment"]["wind_m_s"] = float(spec["wind_m_s"])
+    if "eta_opt_eff" in spec:
+        _set_effective_optical_efficiency(cfg, float(spec["eta_opt_eff"]))
+    if "wind_m_s" in spec:
+        cfg["environment"]["wind_m_s"] = float(spec["wind_m_s"])
+    if "eps_abs" in spec:
+        cfg["materials"]["absorber"]["eps"] = float(spec["eps_abs"])
+    if "eps_glass" in spec:
+        if not bool(cfg["model"].get("has_glass", False)):
+            raise ValueError("El template identificado requiere una cubierta de vidrio.")
+        cfg["materials"]["glass"]["eps"] = float(spec["eps_glass"])
     cfg.setdefault("preset_meta", {})["identified_template"] = spec["label"]
     cfg["preset_meta"]["identified_template_source"] = spec["source"]
     return spec
+
+
+def bhambare_user_inverse_template() -> dict[str, Any]:
+    """Benchmark reproducible del XLSX de identificación Bhambare entregado el 14/09/2026."""
+    spec = identified_parameter_template("bhambare")
+    parameter_table = pd.DataFrame(
+        [
+            {
+                "ID": "eta_opt_eff",
+                "Parametro": "η óptica efectiva (ρ·γ·τ·α…)",
+                "Nominal": 0.6520562499999999,
+                "Identificado": float(spec["eta_opt_eff"]),
+                "Cerca_del_limite": True,
+            },
+            {
+                "ID": "eps_abs",
+                "Parametro": "Emisividad del absorbedor εabs",
+                "Nominal": 0.95,
+                "Identificado": float(spec["eps_abs"]),
+                "Cerca_del_limite": True,
+            },
+            {
+                "ID": "eps_glass",
+                "Parametro": "Emisividad del vidrio εvid",
+                "Nominal": 0.88,
+                "Identificado": float(spec["eps_glass"]),
+                "Cerca_del_limite": True,
+            },
+        ]
+    )
+    comparison_table = pd.DataFrame(
+        [
+            {
+                "Magnitud": key,
+                "Modelo_inicial_XLSX": float(BHAMBARE_USER_INVERSE_2026_09_14["initial"][key]),
+                "Modelo_identificado_XLSX": float(BHAMBARE_USER_INVERSE_2026_09_14["identified"][key]),
+            }
+            for key in ("Tout_C", "Tabs_K", "Tvid_K", "Qloss_W")
+        ]
+    )
+    return {
+        "parameter_table": parameter_table,
+        "comparison_table": comparison_table,
+        "note": (
+            "Template incorporado desde ptc_modelo_inverso_bhambare.xlsx. "
+            "Los tres parámetros identificados quedaron muy próximos a sus límites superiores; "
+            "por eso deben interpretarse como una calibración diagnóstica y no como propiedades universales."
+        ),
+    }
+
+
+def _bhambare_target_values(target_key: str) -> tuple[str, dict[str, float]]:
+    """Devuelve el vector objetivo para la validación multivariable Bhambare."""
+    key = str(target_key).strip().lower()
+    cfg, _ = build_bhambare_sukhatme_preset()
+    ref = cfg["preset_meta"]["reference"]
+    targets: dict[str, tuple[str, dict[str, float]]] = {
+        "sukhatme": (
+            "Sukhatme & Nayak · referencia",
+            {
+                "Tout_C": float(ref["Tout_book_C"]),
+                "Tabs_K": float(ref["Tabs_book_K"]),
+                "Tvid_K": float(ref["Tglass_book_K"]),
+                "Qloss_W": float(ref["Qloss_book_W"]),
+            },
+        ),
+        "bhambare": (
+            "Bhambare · modelo publicado",
+            {
+                "Tout_C": float(ref["Tout_article_C"]),
+                "Tabs_K": float(ref["Tabs_article_K"]),
+                "Tvid_K": float(ref["Tglass_article_K"]),
+                "Qloss_W": float(ref["Qloss_article_W"]),
+            },
+        ),
+        "xlsx_initial": (
+            "XLSX 14/09 · modelo inicial",
+            deepcopy(BHAMBARE_USER_INVERSE_2026_09_14["initial"]),
+        ),
+        "xlsx_identified": (
+            "XLSX 14/09 · modelo identificado",
+            deepcopy(BHAMBARE_USER_INVERSE_2026_09_14["identified"]),
+        ),
+    }
+    if key not in targets:
+        raise ValueError(f"Objetivo Bhambare desconocido: {target_key}")
+    return targets[key]
+
+
+def validate_bhambare_mode(
+    fluid_database: Mapping[str, Mapping[str, Any]],
+    *,
+    target_key: str = "sukhatme",
+    parameter_template: str = "nominal",
+) -> dict[str, Any]:
+    """Valida Bhambare con métricas multivariables comparables a la UI de Rea.
+
+    Como las magnitudes tienen unidades distintas, MAE/RMSE globales se calculan
+    sobre residuos relativos normalizados. La tabla conserva además el error
+    absoluto en las unidades naturales de cada variable.
+    """
+    cfg, _ = build_bhambare_sukhatme_preset()
+    # El XLSX del modelo inverso fue generado con BDF; usar el mismo integrador
+    # hace que esos targets sirvan como test de regresión reproducible.
+    if str(target_key).strip().lower().startswith("xlsx_"):
+        cfg["solver"]["method"] = "BDF"
+    parameter_mode = str(parameter_template).strip().lower()
+    applied_template = None
+    if parameter_mode == "identified":
+        applied_template = apply_identified_parameter_template(cfg, "bhambare")
+    elif parameter_mode != "nominal":
+        raise ValueError(f"Template de parámetros Bhambare desconocido: {parameter_template}")
+
+    result = PTCSimulator(cfg, fluid_database).simulate()
+    k = len(result.t_s) - 1
+    sim = {
+        "Tout_C": float(result.Tout_C[k]),
+        "Tabs_K": float(result.Tabs_mean_C[k] + 273.15),
+        "Tvid_K": float(result.Tglass_mean_C[k] + 273.15),
+        "Qloss_W": float(result.scalar_diag["Qloss_W"][k]),
+    }
+    target_label, target = _bhambare_target_values(target_key)
+
+    labels = {
+        "Tout_C": "T salida",
+        "Tabs_K": "T absorbedor",
+        "Tvid_K": "T vidrio",
+        "Qloss_W": "Q pérdidas",
+    }
+    units = {"Tout_C": "°C", "Tabs_K": "K", "Tvid_K": "K", "Qloss_W": "W"}
+    rows: list[dict[str, Any]] = []
+    signed_relative: list[float] = []
+    for key in ("Tout_C", "Tabs_K", "Tvid_K", "Qloss_W"):
+        ref_value = float(target[key])
+        sim_value = float(sim[key])
+        denom = max(abs(ref_value), np.finfo(float).eps)
+        rel = (sim_value - ref_value) / denom
+        signed_relative.append(rel)
+        rows.append(
+            {
+                "Magnitud": labels[key],
+                "Unidad": units[key],
+                "Objetivo": ref_value,
+                "Modelo_Python": sim_value,
+                "Diferencia": sim_value - ref_value,
+                "Error_abs": abs(sim_value - ref_value),
+                "Error_rel_pct": 100.0 * abs(rel),
+                "Bias_rel_pct": 100.0 * rel,
+            }
+        )
+    residuals = np.asarray(signed_relative, dtype=float)
+    abs_pct = 100.0 * np.abs(residuals)
+    metrics = {
+        "MAPE_multivariable_pct": float(np.mean(abs_pct)),
+        "RMSRE_pct": float(100.0 * np.sqrt(np.mean(residuals**2))),
+        "Bias_rel_medio_pct": float(100.0 * np.mean(residuals)),
+        "Error_max_pct": float(np.max(abs_pct)),
+    }
+
+    near_bounds = []
+    if applied_template is not None:
+        near_bounds = list(applied_template.get("near_bounds", []))
+    note = (
+        "Las cuatro salidas tienen unidades diferentes, por lo que las métricas globales se calculan sobre errores relativos normalizados. "
+        "La tabla muestra también el error absoluto de cada magnitud en su unidad natural."
+    )
+    if applied_template is not None:
+        note += (
+            " Se aplicó el template identificado del XLSX del 14/09/2026: "
+            f"ηopt,ef={applied_template['eta_opt_eff']:.10f}, "
+            f"εabs={applied_template['eps_abs']:.10f}, "
+            f"εvid={applied_template['eps_glass']:.10f}."
+        )
+        if near_bounds:
+            note += " Los parámetros identificados están próximos al límite superior del espacio de búsqueda."
+
+    return {
+        "target_key": str(target_key),
+        "target_label": target_label,
+        "parameter_template": parameter_mode,
+        "applied_parameters": applied_template,
+        "table": pd.DataFrame(rows),
+        "result": result,
+        "config": cfg,
+        "metrics": metrics,
+        "note": note,
+    }
 
 
 def prototype_user_export_template() -> dict[str, Any]:

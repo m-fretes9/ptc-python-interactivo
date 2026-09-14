@@ -1,0 +1,19 @@
+V13 — Validación Bhambare con métricas de error
+
+- Nueva sección en Validación: “Bhambare / Sukhatme — validación por objetivo”.
+- Objetivos seleccionables:
+  * Sukhatme & Nayak (referencia)
+  * Bhambare (modelo publicado)
+  * XLSX 14/09 — modelo inicial
+  * XLSX 14/09 — modelo identificado
+- Parámetros seleccionables: nominales o identificados del modelo inverso.
+- Template identificado Bhambare incorporado:
+  eta_opt_eff = 0.7671242147795794
+  eps_abs     = 0.989999998086766
+  eps_glass   = 0.9899999947177927
+- Métricas globales normalizadas: MAPE multivariable, RMSRE, bias relativo medio y error máximo.
+- Tabla por magnitud con valor objetivo, Python, diferencia, error absoluto y error relativo.
+- Botón para aplicar parámetros nominales/identificados al simulador.
+- XLSX original incorporado en templates/ptc_modelo_inverso_bhambare.xlsx.
+- Los targets XLSX fuerzan BDF para reproducir el integrador usado durante la identificación.
+- 14 tests aprobados.

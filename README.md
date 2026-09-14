@@ -256,3 +256,6 @@ También se incorpora `templates/rea_fiamonzini_export_2026-09-14.csv`, copia ex
 Para el prototipo Rea Quille/Fiamonzini se incorpora un modo físico temporal sin tracking. El DNI puede modelarse con un perfil de cielo claro normalizado para alcanzar 905 W/m² al mediodía solar. El colector no sigue al Sol, por lo que la potencia sobre su apertura se calcula como `G_apertura = DNI*cos(theta)` y además se aplican `IAM(theta)` y `EndLoss(theta)`.
 
 Para comparar con la ecuación experimental (10) de Rea Quille se usa `eta_DNI = Qutil/(Aa*DNI)`. La eficiencia histórica `eta_pct = Qutil/Qincidente_proyectada` se conserva como diagnóstico. Esta separación evita cancelar artificialmente la pérdida por coseno al evaluar un colector fijo.
+
+## V13 — validación Bhambare por errores
+La pestaña **Validación** incluye ahora una comparación multivariable para Bhambare/Sukhatme con selección de referencia documental o de los benchmarks del XLSX de identificación del 14/09/2026. Las métricas globales se calculan sobre residuos relativos normalizados porque las salidas comparadas tienen unidades distintas.
