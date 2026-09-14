@@ -49,6 +49,10 @@ from visualizations import (
     sensitivity_tornado_figure,
     validation_bhambare_figure,
     validation_tcc_figure,
+    validation_monthly_comparison_figure,
+    validation_holdout_error_figure,
+    validation_prediction_scatter_figure,
+    validation_signed_residual_figure,
 )
 
 
@@ -847,7 +851,7 @@ if st.session_state.results and st.session_state.result_signature != project_sig
 
 main_section = st.radio(
     "Sección principal",
-    ["Simulación", "Propiedades", "Validación", "Sensibilidad"],
+    ["Simulación", "Propiedades", "Validación", "Gráficos", "Sensibilidad"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_section_v14",
@@ -856,6 +860,7 @@ st.caption({
     "Simulación": "Resultados, análisis nodal y exportación del caso activo.",
     "Propiedades": "Irradiación, cielo y propiedades termofísicas del HTF.",
     "Validación": "Calibración con muestra y prueba fuera de muestra con parámetros congelados.",
+    "Gráficos": "Comparativas visuales y trazables de la última validación fuera de muestra.",
     "Sensibilidad": "Convergencia numérica y efecto de perturbaciones paramétricas sobre las salidas.",
 }[main_section])
 
@@ -1404,7 +1409,7 @@ elif main_section == "Validación":
 
         st.markdown("**Parámetros calibrados**")
         st.dataframe(validation_result["parameter_table"], width="stretch", hide_index=True)
-        action = st.columns(2)
+        action = st.columns(3)
         if action[0].button(
             "Usar parámetros calibrados en el simulador",
             type="primary",
@@ -1432,6 +1437,13 @@ elif main_section == "Validación":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
+        if action[2].button(
+            "Abrir gráficos",
+            width="stretch",
+            key="open_validation_charts_v14_2",
+        ):
+            st.session_state["_pending_widget_state"] = {"main_section_v14": "Gráficos"}
+            st.rerun()
 
     st.divider()
     with st.expander("Benchmarks documentales · diagnóstico adicional", expanded=False):
@@ -1472,6 +1484,134 @@ elif main_section == "Validación":
             c[2].metric("MAPE η", f"{pm['MAPE_pct']:.2f} %")
             c[3].metric("η Python media", f"{pm['Eta_python_mean_pct']:.2f} %")
             st.dataframe(pv["table"], width="stretch", hide_index=True)
+
+elif main_section == "Gráficos":
+    st.subheader("Gráficos de validación")
+    st.caption(
+        "Esta sección no recalcula ni modifica el modelo. Visualiza exactamente los datos de la última calibración/validación guardada en la sesión, "
+        "separando los meses usados para calibrar de los meses hold-out que nunca participaron del ajuste."
+    )
+
+    graph_validation = st.session_state.validations.get("model_validation")
+    if not isinstance(graph_validation, dict):
+        st.info("Todavía no existe una validación hold-out en esta sesión. Ejecute primero la sección Validación.")
+    else:
+        graph_case = str(graph_validation.get("case", "—"))
+        case_names = {"rea_foz": "Rea Quille · Foz do Iguaçu", "rea_alvorada": "Rea Quille · Alvorada do Norte"}
+        comparison = validation_comparison_table(graph_validation)
+        summary = calibration_error_summary(graph_validation)
+
+        st.markdown(f"#### {case_names.get(graph_case, graph_case)}")
+        metric_cols = st.columns(6)
+        metric_cols[0].metric("Score hold-out · antes", f"{summary.get('holdout_score_before_pct', float('nan')):.2f} %")
+        metric_cols[1].metric("Score hold-out · después", f"{summary.get('holdout_score_pct', float('nan')):.2f} %")
+        metric_cols[2].metric("RMSE η", f"{summary.get('eta_rmse', float('nan')):.2f} pp")
+        metric_cols[3].metric("MAPE η", f"{summary.get('eta_mape_pct', float('nan')):.2f} %")
+        metric_cols[4].metric("RMSE Tout", f"{summary.get('tout_rmse', float('nan')):.2f} °C")
+        metric_cols[5].metric("MAPE Tout", f"{summary.get('tout_mape_pct', float('nan')):.2f} %")
+
+        if comparison.empty:
+            st.warning("La validación existe, pero no hay una tabla comparativa utilizable en la sesión actual.")
+        else:
+            graph_tab_eta, graph_tab_tout, graph_tab_scatter, graph_tab_residuals, graph_tab_data = st.tabs(
+                ["Eficiencia", "Temperatura de salida", "Predicción vs referencia", "Residuos", "Datos"]
+            )
+
+            with graph_tab_eta:
+                st.plotly_chart(
+                    validation_monthly_comparison_figure(comparison, "Eta_pct"),
+                    width="stretch",
+                    key=f"validation_graph_eta_monthly_{graph_case}",
+                )
+                st.plotly_chart(
+                    validation_holdout_error_figure(comparison, "Eta_pct"),
+                    width="stretch",
+                    key=f"validation_graph_eta_errors_{graph_case}",
+                )
+                st.caption(
+                    "El primer gráfico permite verificar si la calibración sigue la referencia mes a mes. "
+                    "El segundo usa exclusivamente los ocho meses hold-out y compara el error antes y después del ajuste."
+                )
+
+            with graph_tab_tout:
+                st.plotly_chart(
+                    validation_monthly_comparison_figure(comparison, "Tout_C"),
+                    width="stretch",
+                    key=f"validation_graph_tout_monthly_{graph_case}",
+                )
+                st.plotly_chart(
+                    validation_holdout_error_figure(comparison, "Tout_C"),
+                    width="stretch",
+                    key=f"validation_graph_tout_errors_{graph_case}",
+                )
+                st.caption(
+                    "La temperatura de salida se evalúa de forma independiente de la eficiencia. "
+                    "Un ajuste aceptable debe reducir el error fuera de muestra sin depender sólo de una magnitud."
+                )
+
+            with graph_tab_scatter:
+                sc_left, sc_right = st.columns(2)
+                with sc_left:
+                    st.plotly_chart(
+                        validation_prediction_scatter_figure(comparison, "Eta_pct"),
+                        width="stretch",
+                        key=f"validation_graph_eta_scatter_{graph_case}",
+                    )
+                with sc_right:
+                    st.plotly_chart(
+                        validation_prediction_scatter_figure(comparison, "Tout_C"),
+                        width="stretch",
+                        key=f"validation_graph_tout_scatter_{graph_case}",
+                    )
+                st.caption(
+                    "La línea diagonal representa predicción perfecta. Los puntos calibrados deberían acercarse a esa diagonal en datos que el optimizador nunca vio."
+                )
+
+            with graph_tab_residuals:
+                rs_left, rs_right = st.columns(2)
+                with rs_left:
+                    st.plotly_chart(
+                        validation_signed_residual_figure(comparison, "Eta_pct"),
+                        width="stretch",
+                        key=f"validation_graph_eta_residual_{graph_case}",
+                    )
+                with rs_right:
+                    st.plotly_chart(
+                        validation_signed_residual_figure(comparison, "Tout_C"),
+                        width="stretch",
+                        key=f"validation_graph_tout_residual_{graph_case}",
+                    )
+                st.caption(
+                    "Residual positivo = el modelo sobreestima la referencia; residual negativo = subestima. "
+                    "La alternancia alrededor de cero ayuda a detectar si queda un sesgo sistemático."
+                )
+
+            with graph_tab_data:
+                st.markdown("**Datos exactos detrás de los gráficos**")
+                st.dataframe(comparison, width="stretch", hide_index=True)
+                st.download_button(
+                    "Descargar datos de los gráficos (CSV)",
+                    data=comparison.to_csv(index=False).encode("utf-8"),
+                    file_name=f"graficos_validacion_{graph_case}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key=f"download_validation_graph_data_{graph_case}",
+                )
+                st.markdown("**Parámetros usados en la calibración**")
+                parameter_table = graph_validation.get("parameter_table")
+                if isinstance(parameter_table, pd.DataFrame) and not parameter_table.empty:
+                    st.dataframe(parameter_table, width="stretch", hide_index=True)
+                else:
+                    st.caption("No hay tabla de parámetros disponible.")
+
+        with st.expander("Cómo comprobar visualmente la validación", expanded=False):
+            st.markdown(
+                "1. **Bandas grises:** meses usados para identificar los parámetros. No cuentan como validación independiente.  \n"
+                "2. **Meses sin banda:** hold-out. Son los puntos que determinan si la calibración generaliza.  \n"
+                "3. **Barras de error:** si la barra calibrada es menor que la inicial, ese mes mejoró fuera de muestra.  \n"
+                "4. **Scatter:** cuanto más cerca de la diagonal `y=x`, mejor la predicción.  \n"
+                "5. **Residuos:** deberían distribuirse alrededor de cero; un signo dominante indica sesgo."
+            )
 
 elif main_section == "Sensibilidad":
     st.subheader("Sensibilidad y convergencia")

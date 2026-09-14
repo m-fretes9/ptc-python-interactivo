@@ -1636,3 +1636,198 @@ def sensitivity_tornado_figure(table: pd.DataFrame) -> go.Figure:
         height=max(480, 34 * len(data)),
     )
     return figure
+
+
+_VALIDATION_MONTH_ORDER = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+
+
+def _validation_magnitude_table(comparison: pd.DataFrame, magnitude: str) -> pd.DataFrame:
+    """Normaliza y ordena una tabla de comparación de validación por mes."""
+    if not isinstance(comparison, pd.DataFrame) or comparison.empty:
+        return pd.DataFrame()
+    required = {
+        "Conjunto", "Caso", "Magnitud", "Referencia",
+        "Modelo_inicial", "Modelo_calibrado",
+        "Error_inicial_pct", "Error_calibrado_pct",
+    }
+    if not required.issubset(comparison.columns):
+        return pd.DataFrame()
+    data = comparison.loc[comparison["Magnitud"] == magnitude].copy()
+    if data.empty:
+        return data
+    order = {month: i for i, month in enumerate(_VALIDATION_MONTH_ORDER)}
+    data["_order"] = data["Caso"].map(order).fillna(999)
+    return data.sort_values(["_order", "Caso"]).drop(columns="_order")
+
+
+def validation_monthly_comparison_figure(comparison: pd.DataFrame, magnitude: str) -> go.Figure:
+    """Referencia, modelo inicial y calibrado; bandas indican puntos usados para calibrar."""
+    data = _validation_magnitude_table(comparison, magnitude)
+    figure = go.Figure()
+    if data.empty:
+        figure.update_layout(title="Sin datos de validación")
+        return figure
+
+    unit = "%" if magnitude == "Eta_pct" else "°C"
+    y_title = "Eficiencia térmica (%)" if magnitude == "Eta_pct" else "Temperatura de salida (°C)"
+    title = "Eficiencia mensual · referencia vs modelo" if magnitude == "Eta_pct" else "Temperatura de salida mensual · referencia vs modelo"
+    x = data["Caso"].astype(str)
+
+    figure.add_trace(go.Scatter(
+        x=x, y=data["Referencia"], mode="lines+markers", name="Referencia",
+        hovertemplate=f"%{{x}}<br>Referencia = %{{y:.3f}} {unit}<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=x, y=data["Modelo_inicial"], mode="lines+markers", name="Modelo inicial",
+        hovertemplate=f"%{{x}}<br>Inicial = %{{y:.3f}} {unit}<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=x, y=data["Modelo_calibrado"], mode="lines+markers", name="Modelo calibrado",
+        customdata=np.stack([data["Conjunto"], data["Error_calibrado_pct"]], axis=-1),
+        hovertemplate=(
+            f"%{{x}}<br>Calibrado = %{{y:.3f}} {unit}"
+            "<br>Conjunto = %{customdata[0]}"
+            "<br>Error relativo = %{customdata[1]:.3f}%<extra></extra>"
+        ),
+    ))
+
+    # Sólo sombrear los puntos que sí participaron en la calibración. Los demás son hold-out.
+    categories = list(x)
+    for idx, row in enumerate(data.itertuples(index=False)):
+        if str(row.Conjunto).lower().startswith("calib"):
+            figure.add_vrect(
+                x0=idx - 0.45, x1=idx + 0.45,
+                fillcolor="rgba(120,120,120,0.10)", line_width=0, layer="below",
+            )
+
+    figure.update_layout(
+        title=title,
+        xaxis_title="Mes",
+        yaxis_title=y_title,
+        height=470,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+        margin={"l": 45, "r": 20, "t": 90, "b": 55},
+    )
+    figure.add_annotation(
+        xref="paper", yref="paper", x=1.0, y=-0.20,
+        text="Bandas grises = meses usados para calibrar · Meses sin banda = hold-out",
+        showarrow=False, xanchor="right", font={"size": 11},
+    )
+    return figure
+
+
+def validation_holdout_error_figure(comparison: pd.DataFrame, magnitude: str) -> go.Figure:
+    """Compara error relativo absoluto inicial vs calibrado sólo en datos hold-out."""
+    data = _validation_magnitude_table(comparison, magnitude)
+    if not data.empty:
+        data = data.loc[data["Conjunto"].astype(str).str.lower() == "validación"].copy()
+    figure = go.Figure()
+    if data.empty:
+        figure.update_layout(title="Sin datos hold-out")
+        return figure
+
+    figure.add_trace(go.Bar(
+        x=data["Caso"], y=np.abs(data["Error_inicial_pct"]), name="Error inicial",
+        customdata=data[["Referencia", "Modelo_inicial"]].to_numpy(),
+        hovertemplate=(
+            "%{x}<br>Error inicial = %{y:.3f}%"
+            "<br>Referencia = %{customdata[0]:.3f}"
+            "<br>Modelo = %{customdata[1]:.3f}<extra></extra>"
+        ),
+    ))
+    figure.add_trace(go.Bar(
+        x=data["Caso"], y=np.abs(data["Error_calibrado_pct"]), name="Error calibrado",
+        customdata=data[["Referencia", "Modelo_calibrado"]].to_numpy(),
+        hovertemplate=(
+            "%{x}<br>Error calibrado = %{y:.3f}%"
+            "<br>Referencia = %{customdata[0]:.3f}"
+            "<br>Modelo = %{customdata[1]:.3f}<extra></extra>"
+        ),
+    ))
+    name = "eficiencia" if magnitude == "Eta_pct" else "temperatura de salida"
+    figure.update_layout(
+        title=f"Error relativo en hold-out · {name}",
+        xaxis_title="Mes no usado en calibración",
+        yaxis_title="Error relativo absoluto (%)",
+        barmode="group",
+        height=450,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+    )
+    return figure
+
+
+def validation_prediction_scatter_figure(comparison: pd.DataFrame, magnitude: str) -> go.Figure:
+    """Predicción vs referencia en hold-out con línea ideal y=x."""
+    data = _validation_magnitude_table(comparison, magnitude)
+    if not data.empty:
+        data = data.loc[data["Conjunto"].astype(str).str.lower() == "validación"].copy()
+    figure = go.Figure()
+    if data.empty:
+        figure.update_layout(title="Sin datos hold-out")
+        return figure
+
+    figure.add_trace(go.Scatter(
+        x=data["Referencia"], y=data["Modelo_inicial"], mode="markers+text", name="Inicial",
+        text=data["Caso"], textposition="top center",
+        customdata=np.abs(data["Error_inicial_pct"]).to_numpy(),
+        hovertemplate="%{text}<br>Referencia = %{x:.3f}<br>Inicial = %{y:.3f}<br>Error = %{customdata:.3f}%<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=data["Referencia"], y=data["Modelo_calibrado"], mode="markers+text", name="Calibrado",
+        text=data["Caso"], textposition="bottom center",
+        customdata=np.abs(data["Error_calibrado_pct"]).to_numpy(),
+        hovertemplate="%{text}<br>Referencia = %{x:.3f}<br>Calibrado = %{y:.3f}<br>Error = %{customdata:.3f}%<extra></extra>",
+    ))
+    values = np.concatenate([
+        data["Referencia"].to_numpy(float),
+        data["Modelo_inicial"].to_numpy(float),
+        data["Modelo_calibrado"].to_numpy(float),
+    ])
+    lo = float(np.nanmin(values))
+    hi = float(np.nanmax(values))
+    pad = max((hi - lo) * 0.08, 0.5)
+    figure.add_trace(go.Scatter(
+        x=[lo - pad, hi + pad], y=[lo - pad, hi + pad], mode="lines", name="Predicción ideal",
+        line={"dash": "dash"}, hoverinfo="skip",
+    ))
+    axis = "Eficiencia (%)" if magnitude == "Eta_pct" else "Temperatura de salida (°C)"
+    figure.update_layout(
+        title=f"Hold-out · predicción vs referencia · {axis}",
+        xaxis_title=f"Referencia · {axis}",
+        yaxis_title=f"Predicción · {axis}",
+        height=520,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+    )
+    figure.update_xaxes(range=[lo - pad, hi + pad])
+    figure.update_yaxes(range=[lo - pad, hi + pad], scaleanchor="x", scaleratio=1)
+    return figure
+
+
+def validation_signed_residual_figure(comparison: pd.DataFrame, magnitude: str) -> go.Figure:
+    """Residual firmado final por mes para verificar sesgo y sobre/subpredicción."""
+    data = _validation_magnitude_table(comparison, magnitude)
+    figure = go.Figure()
+    if data.empty:
+        figure.update_layout(title="Sin datos de validación")
+        return figure
+    residual = data["Modelo_calibrado"].to_numpy(float) - data["Referencia"].to_numpy(float)
+    unit = "pp" if magnitude == "Eta_pct" else "°C"
+    figure.add_trace(go.Bar(
+        x=data["Caso"], y=residual,
+        customdata=np.stack([data["Conjunto"], data["Error_calibrado_pct"]], axis=-1),
+        hovertemplate=(
+            f"%{{x}}<br>Residual = %{{y:+.3f}} {unit}"
+            "<br>Conjunto = %{customdata[0]}"
+            "<br>Error relativo = %{customdata[1]:.3f}%<extra></extra>"
+        ),
+    ))
+    figure.add_hline(y=0.0, line_dash="dash")
+    title = "Residual calibrado · eficiencia" if magnitude == "Eta_pct" else "Residual calibrado · temperatura de salida"
+    figure.update_layout(
+        title=title,
+        xaxis_title="Mes",
+        yaxis_title=f"Modelo calibrado − referencia ({unit})",
+        height=420,
+    )
+    return figure

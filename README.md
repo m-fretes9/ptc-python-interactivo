@@ -237,3 +237,7 @@ La pestaña **Validación** incluye ahora una comparación multivariable para Bh
 ## V14.1 — compatibilidad Streamlit
 
 Se corrigieron IDs duplicados de gráficos Plotly y APIs deprecadas de Streamlit. Requiere Streamlit >= 1.56.0. No cambia el modelo físico.
+
+
+## V14.2 · Gráficos de validación
+La navegación principal incluye ahora **Gráficos**, una vista de auditoría visual de la última validación hold-out: comparativas mensuales, errores antes/después, predicción vs referencia, residuos y datos descargables.
