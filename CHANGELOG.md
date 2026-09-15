@@ -399,3 +399,33 @@ Se retiraron del ZIP completo los módulos y tests de las pruebas diagnósticas 
 - El par Bhambare cierra el balance del vidrio dentro de ~3.3 %, mientras el par Sukhatme deja un residual aproximado de -29.5 % con las ecuaciones de Bhambare implementadas, señal de incompatibilidad estructural entre ambos benchmarks bajo el mismo circuito radial.
 - Se mantienen un único `CHANGELOG.md` y se eliminan del paquete los módulos de la hipótesis diagnóstica anterior.
 
+
+---
+
+## V14.11 — Auditoría absorbedor → HTF · Bhambare/Sukhatme
+
+- Se retira de la interfaz la auditoría radial V14.10 una vez comprobado que el bloque externo puede reproducir los Qloss publicados al imponer Tglass.
+- Nueva prueba diagnóstica centrada en la transferencia interna absorbedor→HTF.
+- Se ejecuta el mismo caso Bhambare con dos ramas controladas:
+  - Dittus–Boelter forzado, tal como está configurado el preset documental;
+  - selección automática de régimen, que con las propiedades actuales cae en Nu=4.36.
+- Se reportan perfiles axiales de Re, Pr, Nu, h, Qfluid y propiedades del Paratherm NF.
+- Se infiere un h/Nu global equivalente para Bhambare y Sukhatme a partir de Tabs y Tout publicados mediante LMTD, sin calibrar el modelo.
+- La interfaz advierte explícitamente que Bhambare publica Cp pero no tabula rho, mu ni k del Paratherm NF usado en la referencia [15], por lo que los equivalentes se calculan con la base de propiedades actual y no representan una reconstrucción exacta del aceite del artículo.
+- Diagnóstico esperado del caso nominal actual: Re medio ≈ 2180; Dittus–Boelter forzado produce h ≈ 134 W/m²K; la rama automática laminar ≈ 14 W/m²K; Bhambare exige un h equivalente intermedio y Sukhatme uno superior al Dittus actual.
+- Se eliminan del paquete los módulos/test de la auditoría radial V14.10.
+- El historial continúa concentrado exclusivamente en `CHANGELOG.md`.
+
+---
+
+## V14.12 — Auditoría directa de régimen/correlación interna
+
+- Se retira de la interfaz y del paquete la auditoría V14.11 absorbedor→HTF basada en h equivalentes de Bhambare/Sukhatme.
+- La hipótesis activa pasa a ser exclusivamente **régimen/correlación interna**, sin recalibrar propiedades de ningún fluido.
+- La prueba incluye simultáneamente agua (Rea Quille: Foz y Alvorada) y Paratherm NF (Bhambare), de modo que el diagnóstico no dependa de propiedades desconocidas del aceite.
+- Se añaden ramas diagnósticas a `internal_convection`: Nu=4.36 plenamente desarrollado, Hausen laminar con corrección de entrada, Sieder–Tate laminar de entrada y Dittus–Boelter forzado como control documental.
+- Se añade el número de Graetz y estimaciones de longitud térmica/hidrodinámica de entrada.
+- Se ejecutan las 12 condiciones mensuales de Foz y Alvorada con cada correlación, manteniendo idénticas propiedades y entradas; se reportan RMSE de eficiencia, RMSE de Tout, bias y correlación temporal.
+- Se repite el caso Bhambare con las mismas cuatro ramas para comparar el efecto del régimen sin atribuirlo a cambios de propiedades.
+- La prueba es diagnóstica: ninguna correlación se adopta automáticamente como definitiva.
+- Se mantiene un único `CHANGELOG.md`.

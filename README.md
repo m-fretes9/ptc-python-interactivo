@@ -74,7 +74,7 @@ Desde VSCode también puede abrir **Run and Debug** y seleccionar **Ejecutar int
 
 ## 4. Flujo de uso
 
-La interfaz V14.5 se organiza en cinco secciones principales:
+La interfaz V14.12 se organiza en cinco secciones principales:
 
 1. **Simulación**: resultados, análisis nodo por nodo y reporte/exportación. El botón **Ejecutar simulación** permanece en el encabezado superior derecho. Si la potencia solar absorbida es constante, la app omite el dashboard transitorio y muestra directamente el estado representativo/perfiles axiales.
 2. **Propiedades**: diagnóstico de irradiación, temperatura efectiva del cielo, perfil horario editable y propiedades termofísicas del HTF.
@@ -310,3 +310,19 @@ La prueba diagnóstica activa ya no modifica el viento ni el solver. Ejecuta el 
 
 La prueba **no calibra parámetros**. Su objetivo es localizar el siguiente bloque físico que debe revisarse.
 
+
+
+## V14.12 · Auditoría directa de régimen/correlación interna
+
+La prueba diagnóstica activa ya no intenta inferir propiedades de Paratherm. Mantiene la misma base de propiedades y cambia **únicamente la correlación interna** en tres conjuntos: agua de Foz, agua de Alvorada y Paratherm NF de Bhambare.
+
+Se comparan cuatro ramas:
+
+- `Nu=4.36`: límite laminar plenamente desarrollado con flujo de calor uniforme;
+- Hausen con corrección de entrada laminar y asíntota 4.36;
+- Sieder–Tate laminar de entrada;
+- Dittus–Boelter forzado como control documental, sin asumir validez cuando Reynolds es bajo.
+
+La interfaz reporta Reynolds, Prandtl, Graetz, longitud térmica/hidrodinámica de entrada, Nu, h, RMSE de eficiencia y RMSE de Tout para Foz y Alvorada, además del efecto sobre Bhambare/Sukhatme. Esto permite responder directamente si la discrepancia aparece también con agua y, por tanto, no puede atribuirse solo a las propiedades del aceite.
+
+La auditoría V14.11 fue retirada de la interfaz y del paquete. El historial continúa concentrado en un único `CHANGELOG.md`.

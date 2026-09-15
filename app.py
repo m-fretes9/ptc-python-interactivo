@@ -18,12 +18,13 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
-from bhambare_radial_audit import run_bhambare_radial_audit
-from bhambare_radial_charts import (
-    external_loss_closure_figure,
-    glass_balance_figure,
-    glass_residual_figure,
-    absorber_partition_figure,
+from internal_correlation_audit import run_internal_correlation_audit
+from internal_correlation_charts import (
+    regime_map_figure,
+    nu_by_month_figure,
+    rmse_comparison_figure,
+    efficiency_curves_figure,
+    bhambare_correlation_figure,
 )
 from validations import (
     analyze_bhambare_numerical_convergence,
@@ -1316,95 +1317,108 @@ elif main_section == "Validación":
     )
 
     # ------------------------------------------------------------------
-    # Prueba diagnóstica: cierre radial Bhambare/Sukhatme.
-    # La comparación de solvers MATLAB/Python ya descartó el integrador como
-    # causa principal. Esta etapa comprueba primero si el bloque externo de
-    # pérdidas es capaz de reproducir Qloss cuando se impone Tglass publicada.
+    # Prueba diagnóstica: absorbedor -> HTF (Bhambare/Sukhatme).
     # ------------------------------------------------------------------
-    st.markdown("#### Prueba diagnóstica · cierre radial Bhambare / Sukhatme")
+    # V14.12 · Auditoría directa de régimen/correlación interna.
+    # La etapa anterior mezclaba correlación y propiedades de Paratherm.
+    # Aquí se cambia SOLO la correlación y se prueba también con agua.
+    # ------------------------------------------------------------------
+    st.markdown("#### Prueba diagnóstica · régimen y correlación interna · agua + Paratherm")
     st.write(
-        "La comparación MATLAB/Python mostró que ode45, ode15s, ode23t y SciPy convergen prácticamente al mismo estado. "
-        "Por eso esta prueba deja de tocar el solver y abre el circuito térmico radial. Primero pregunta si nuestras ecuaciones "
-        "de convección externa + radiación al cielo reproducen las pérdidas publicadas cuando se impone la temperatura de vidrio "
-        "de Bhambare o Sukhatme. Después verifica si los pares publicados (Tabs, Tglass) cierran el balance del vidrio con las mismas ecuaciones."
+        "Esta etapa separa explícitamente la elección de correlación de las propiedades del HTF. "
+        "Se usa exactamente la misma base termofísica y se cambia únicamente la ley de Nusselt. "
+        "El punto clave es comprobar si el agua de Rea Quille —que no depende de las propiedades de Paratherm— también está siendo afectada por la hipótesis de Nu=4.36 plenamente desarrollado."
     )
-    st.latex(r"Q_{loss,ext}=h_{ext}\pi D_5L(T_g-T_{amb})+\varepsilon_g\sigma\pi D_5L(T_g^4-T_{sky}^4)")
+    st.latex(r"Re=\frac{4\dot m}{\pi D\mu},\qquad Gz=Re\,Pr\frac{D}{L},\qquad h=\frac{Nu\,k}{D}")
     st.caption(
-        "Prueba controlada: no calibra emisividades, óptica, viento ni solver. Si Qloss cierra al imponer Tglass, el bloque externo no es el origen principal de la discrepancia y debemos buscar la causa aguas arriba del vidrio."
+        "Se comparan cuatro ramas: Nu=4.36 plenamente desarrollado; Hausen con corrección de entrada laminar; "
+        "Sieder–Tate laminar en desarrollo; y Dittus–Boelter forzado como control documental. "
+        "Dittus no se interpreta como válido cuando Re está fuera de su dominio turbulento. Ninguna rama se adopta automáticamente como modelo final."
     )
 
     if st.button(
-        "Ejecutar auditoría radial Bhambare/Sukhatme",
-        type="primary", width="stretch", key="run_bhambare_radial_audit_v1410",
+        "Ejecutar auditoría de régimen/correlación",
+        type="primary", width="stretch", key="run_internal_correlation_audit_v1412",
     ):
         try:
-            with st.spinner("Ejecutando Bhambare nominal y auditando el cierre radial..."):
-                st.session_state.validations["bhambare_radial_audit"] = run_bhambare_radial_audit(fluid_db)
+            with st.spinner("Comparando correlaciones en Foz, Alvorada y Bhambare..."):
+                st.session_state.validations["internal_correlation_audit"] = run_internal_correlation_audit(fluid_db)
         except Exception as exc:
             st.exception(exc)
 
-    radial = st.session_state.validations.get("bhambare_radial_audit")
-    if isinstance(radial, dict):
-        metrics = radial["metrics"]
-        target = radial["target_table"]
-        scenarios = radial["scenario_table"]
-        bh = target.loc[target["Referencia"] == "Bhambare"].iloc[0]
-        su = target.loc[target["Referencia"] == "Sukhatme"].iloc[0]
-        bh_pair = scenarios.loc[scenarios["Escenario"] == "Bhambare"].iloc[0]
-        su_pair = scenarios.loc[scenarios["Escenario"] == "Sukhatme"].iloc[0]
+    corr_audit = st.session_state.validations.get("internal_correlation_audit")
+    if isinstance(corr_audit, dict):
+        regime = corr_audit["regime_table"]
+        metrics_corr = corr_audit["metrics_table"]
+        monthly_corr = corr_audit["monthly_table"]
+        bh_corr = corr_audit["bhambare_table"]
+        bh_errors_corr = corr_audit["bhambare_errors"]
 
+        # Resumen rápido de régimen: agua primero, porque responde directamente
+        # a la objeción de que el problema podría ser solo Paratherm.
+        foz_reg = regime.loc[regime["Ciudad_caso"] == "Foz"].iloc[0]
+        alv_reg = regime.loc[regime["Ciudad_caso"] == "Alvorada"].iloc[0]
+        bh_reg = regime.loc[regime["Ciudad_caso"] == "Bhambare"].iloc[0]
         top = st.columns(6)
-        top[0].metric("Tglass Python", f"{metrics['Tglass_model_K']:.2f} K")
-        top[1].metric("ΔTglass vs Sukhatme", f"{metrics['Tglass_error_vs_sukhatme_K']:+.2f} K")
-        top[2].metric("Qloss Python", f"{metrics['Qloss_model_W']:.1f} W")
-        top[3].metric("Tg req. · Bhambare", f"{bh['Tglass_requerida_por_bloque_externo_K']:.2f} K", delta=f"{bh['Delta_Tglass_K']:+.2f} K")
-        top[4].metric("Tg req. · Sukhatme", f"{su['Tglass_requerida_por_bloque_externo_K']:.2f} K", delta=f"{su['Delta_Tglass_K']:+.2f} K")
-        top[5].metric("Residual vidrio · Sukhatme", f"{su_pair['Residual_glass_pct_Qout']:+.1f} %")
+        top[0].metric("Re máx. · Foz agua", f"{foz_reg['Re_max']:.0f}")
+        top[1].metric("Lth/L · Foz", f"{foz_reg['Lth_sobre_L']:.2f}")
+        top[2].metric("Re máx. · Alvorada agua", f"{alv_reg['Re_max']:.0f}")
+        top[3].metric("Lth/L · Alvorada", f"{alv_reg['Lth_sobre_L']:.2f}")
+        top[4].metric("Re medio · Bhambare", f"{bh_reg['Re_mean']:.0f}")
+        top[5].metric("Mejor RMSE conjunto", corr_audit.get("best_combined_label", "—"))
 
-        verdict = radial.get("verdict", "")
-        if verdict.startswith("externo_ok"):
-            st.success(radial["diagnosis"])
-        else:
-            st.warning(radial["diagnosis"])
+        st.info(corr_audit["diagnosis"])
 
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(
-                external_loss_closure_figure(radial["loss_curve"], target, scenarios),
-                width="stretch", key="bh_radial_external_closure_v1410",
-            )
+            st.plotly_chart(regime_map_figure(monthly_corr, bh_corr), width="stretch", key="corr_regime_map_v1412")
         with c2:
-            st.plotly_chart(
-                glass_balance_figure(scenarios), width="stretch", key="bh_radial_glass_balance_v1410"
-            )
+            st.plotly_chart(rmse_comparison_figure(metrics_corr), width="stretch", key="corr_rmse_v1412")
+
+        city_plot = st.selectbox(
+            "Ciudad para inspeccionar la forma mensual",
+            ["Foz", "Alvorada"],
+            key="corr_audit_city_v1412",
+        )
         c3, c4 = st.columns(2)
         with c3:
-            st.plotly_chart(
-                glass_residual_figure(scenarios), width="stretch", key="bh_radial_glass_residual_v1410"
-            )
+            st.plotly_chart(nu_by_month_figure(monthly_corr, city_plot), width="stretch", key=f"corr_nu_{city_plot}_v1412")
         with c4:
-            st.plotly_chart(
-                absorber_partition_figure(scenarios), width="stretch", key="bh_radial_abs_partition_v1410"
-            )
+            st.plotly_chart(efficiency_curves_figure(monthly_corr, city_plot), width="stretch", key=f"corr_eta_{city_plot}_v1412")
 
-        with st.expander("Ver datos exactos de la auditoría radial", expanded=False):
-            st.markdown("**Temperatura de vidrio necesaria para reproducir las pérdidas publicadas**")
-            st.dataframe(target, width="stretch", hide_index=True)
-            st.markdown("**Balance radial con los pares de temperatura publicados**")
-            st.dataframe(scenarios, width="stretch", hide_index=True)
+        st.plotly_chart(bhambare_correlation_figure(bh_corr), width="stretch", key="corr_bhambare_h_v1412")
+
+        st.markdown("**Indicadores de validación con agua · sin calibrar propiedades**")
+        st.dataframe(
+            metrics_corr[[
+                "Ciudad", "Correlacion", "RMSE_eta_pp", "MAE_eta_pp", "Bias_eta_pp",
+                "r_eta", "RMSE_Tout_C", "Re_mean", "Nu_mean", "h_mean_W_m2K", "Lth_sobre_L_mean"
+            ]],
+            width="stretch", hide_index=True,
+        )
+
+        with st.expander("Ver datos exactos de régimen/correlación", expanded=False):
+            st.markdown("**Resumen de régimen**")
+            st.dataframe(regime, width="stretch", hide_index=True)
+            st.markdown("**Resultados mensuales completos · agua**")
+            st.dataframe(monthly_corr, width="stretch", hide_index=True)
+            st.markdown("**Bhambare · resultados por correlación**")
+            st.dataframe(bh_corr, width="stretch", hide_index=True)
+            st.markdown("**Bhambare/Sukhatme · errores por correlación**")
+            st.dataframe(bh_errors_corr, width="stretch", hide_index=True)
             st.download_button(
-                "Descargar auditoría radial · CSV",
-                data=scenarios.to_csv(index=False).encode("utf-8-sig"),
-                file_name="auditoria_radial_bhambare_sukhatme.csv",
-                mime="text/csv", width="stretch", key="download_bh_radial_v1410",
+                "Descargar resultados mensuales · CSV",
+                data=monthly_corr.to_csv(index=False).encode("utf-8-sig"),
+                file_name="auditoria_correlacion_interna_rea.csv",
+                mime="text/csv", width="stretch", key="download_corr_monthly_v1412",
             )
             st.download_button(
-                "Descargar cierre de Qloss · CSV",
-                data=target.to_csv(index=False).encode("utf-8-sig"),
-                file_name="cierre_qloss_bhambare_sukhatme.csv",
-                mime="text/csv", width="stretch", key="download_bh_qloss_v1410",
+                "Descargar Bhambare/Sukhatme · CSV",
+                data=bh_errors_corr.to_csv(index=False).encode("utf-8-sig"),
+                file_name="auditoria_correlacion_interna_bhambare.csv",
+                mime="text/csv", width="stretch", key="download_corr_bh_v1412",
             )
-        st.caption(radial.get("note", ""))
+        st.caption(corr_audit.get("note", ""))
 
     st.divider()
 

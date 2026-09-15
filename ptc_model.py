@@ -210,6 +210,7 @@ class PTCSimulator:
             "Nu_internal",
             "h_internal_W_m2K",
             "transition_weight",
+            "Graetz_internal",
             "h_external_W_m2K",
             "rho_kg_m3",
             "mu_Pa_s",
@@ -292,6 +293,7 @@ class PTCSimulator:
                 "Nu_internal",
                 "h_internal_W_m2K",
                 "transition_weight",
+                "Graetz_internal",
                 "h_external_W_m2K",
                 "rho_kg_m3",
                 "mu_Pa_s",
@@ -331,6 +333,7 @@ class PTCSimulator:
                 str(cfg["model"]["internal_correlation"]),
                 float(cfg["model"].get("Re_laminar_max", 2300.0)),
                 float(cfg["model"].get("Re_turbulent_min", 4000.0)),
+                characteristic_length_m=float(g["L"]),
             )
 
             Aint = np.pi * float(g["D2"]) * self.dx
@@ -481,6 +484,7 @@ class PTCSimulator:
             arrays["Nu_internal"][i] = conv_int["Nu"]
             arrays["h_internal_W_m2K"][i] = conv_int["h_W_m2K"]
             arrays["transition_weight"][i] = conv_int["transition_weight"]
+            arrays["Graetz_internal"][i] = conv_int["Graetz"]
             arrays["rho_kg_m3"][i] = prop.rho
             arrays["mu_Pa_s"][i] = prop.mu
             arrays["Cp_J_kgK"][i] = prop.Cp
@@ -747,6 +751,7 @@ def internal_convection(
     mode: str,
     re_laminar_max: float = 2300.0,
     re_turbulent_min: float = 4000.0,
+    characteristic_length_m: float | None = None,
 ) -> dict[str, Any]:
     """Coeficiente convectivo interno con transición continua de régimen.
 
@@ -786,7 +791,36 @@ def internal_convection(
         )
         return max(float(value), 4.36)
 
-    if normalized_mode == "dittusboelter_forzado":
+    length_m = max(float(characteristic_length_m or diameter_m), diameter_m)
+    graetz = max(Re * Pr * diameter_m / length_m, 0.0)
+
+    def _hausen_heat_flux_nu() -> float:
+        # Correlación media de entrada laminar. Se conserva Nu=4.36 como
+        # límite plenamente desarrollado para flujo circular con q'' uniforme.
+        correction = 0.0668 * graetz / (1.0 + 0.04 * max(graetz, 0.0) ** (2.0 / 3.0))
+        return max(4.36 + correction, 4.36)
+
+    def _sieder_tate_laminar_nu() -> float:
+        # Correlación media de entrada térmica/hidrodinámica. El factor de
+        # viscosidad usa bulk/pared, exactamente las propiedades ya evaluadas
+        # por el modelo. Se usa solo como rama diagnóstica.
+        visc_ratio = prop.mu / max(prop_wall.mu, np.finfo(float).eps)
+        value = 1.86 * max(graetz, 0.0) ** (1.0 / 3.0) * visc_ratio ** 0.14
+        return max(float(value), 4.36)
+
+    if normalized_mode == "laminar_436_forzado":
+        Nu = 4.36
+        weight = 0.0
+        correlation = "Laminar plenamente desarrollado Nu=4.36"
+    elif normalized_mode == "hausen_laminar":
+        Nu = _hausen_heat_flux_nu()
+        weight = 0.0
+        correlation = "Hausen laminar en desarrollo (q'' uniforme)"
+    elif normalized_mode == "sieder_tate_laminar":
+        Nu = _sieder_tate_laminar_nu()
+        weight = 0.0
+        correlation = "Sieder-Tate laminar en desarrollo"
+    elif normalized_mode == "dittusboelter_forzado":
         Nu = _dittus_boelter_nu(Re)
         weight = 1.0
         correlation = "Dittus-Boelter forzado"
@@ -818,6 +852,7 @@ def internal_convection(
         "Nu": float(Nu),
         "h_W_m2K": float(Nu * prop.k / diameter_m),
         "transition_weight": float(weight),
+        "Graetz": float(graetz),
         "correlation": correlation,
     }
 
