@@ -1833,82 +1833,113 @@ def validation_signed_residual_figure(comparison: pd.DataFrame, magnitude: str) 
     return figure
 
 
-def rea_eq10_tout_diagnostic_figure(table: pd.DataFrame) -> go.Figure:
-    """Tout mensual: referencia documental vs salida directa del simulador."""
+def rea_energy_flow_audit_figure(table: pd.DataFrame) -> go.Figure:
+    """Potencias principales de la auditoría mensual de Rea Quille."""
     figure = go.Figure()
     if not isinstance(table, pd.DataFrame) or table.empty:
-        figure.update_layout(title="Sin datos para la prueba Eq. (10)")
+        figure.update_layout(title="Sin datos para la auditoría energética")
         return figure
     x = table["Mes"].astype(str)
-    figure.add_trace(go.Scatter(
-        x=x,
-        y=table["Tout_ref_C"],
-        mode="lines+markers",
-        name="Tout referencia",
-        hovertemplate="%{x}<br>Referencia = %{y:.3f} °C<extra></extra>",
-    ))
-    figure.add_trace(go.Scatter(
-        x=x,
-        y=table["Tout_Python_C"],
-        mode="lines+markers",
-        name="Tout Python",
-        customdata=table[["Err_Tout_pct"]].to_numpy(),
-        hovertemplate="%{x}<br>Python = %{y:.3f} °C<br>Error = %{customdata[0]:.3f}%<extra></extra>",
-    ))
+    series = [
+        ("Qsolar_absorbida_W", "Solar absorbida"),
+        ("Qutil_modelo_W", "Útil · modelo"),
+        ("Qutil_referencia_W", "Útil · referencia"),
+        ("Qloss_modelo_W", "Pérdidas · modelo"),
+    ]
+    for column, label in series:
+        figure.add_trace(
+            go.Scatter(
+                x=x,
+                y=table[column],
+                mode="lines+markers",
+                name=label,
+                hovertemplate=f"%{{x}}<br>{label} = %{{y:.2f}} W<extra></extra>",
+            )
+        )
     figure.update_layout(
-        title="Prueba simple · Tout mensual",
+        title="Auditoría energética · potencias mensuales",
         xaxis_title="Mes",
-        yaxis_title="Temperatura de salida (°C)",
-        height=420,
+        yaxis_title="Potencia (W)",
+        height=450,
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
     )
     return figure
 
 
-def rea_eq10_efficiency_diagnostic_figure(table: pd.DataFrame) -> go.Figure:
-    """Audita si la forma de η cambia al reconstruirla exclusivamente desde Tout mediante la Ec. (10)."""
+def rea_loss_breakdown_audit_figure(table: pd.DataFrame) -> go.Figure:
+    """Desglose de las pérdidas actuales y pérdida requerida para cerrar la referencia."""
     figure = go.Figure()
     if not isinstance(table, pd.DataFrame) or table.empty:
-        figure.update_layout(title="Sin datos para la prueba Eq. (10)")
+        figure.update_layout(title="Sin datos para la auditoría energética")
         return figure
     x = table["Mes"].astype(str)
-    figure.add_trace(go.Scatter(
-        x=x,
-        y=table["Eta_ref_publicada_pct"],
-        mode="lines+markers",
-        name="Referencia publicada",
-        hovertemplate="%{x}<br>η publicada = %{y:.3f}%<extra></extra>",
-    ))
-    figure.add_trace(go.Scatter(
-        x=x,
-        y=table["Eta_ref_recalculada_Eq10_pct"],
-        mode="markers",
-        name="Referencia recalculada Eq. (10)",
-        marker={"symbol": "x", "size": 9},
-        hovertemplate="%{x}<br>η ref Eq.10 = %{y:.3f}%<extra></extra>",
-    ))
-    figure.add_trace(go.Scatter(
-        x=x,
-        y=table["Eta_Python_Eq10_desde_Tout_pct"],
-        mode="lines+markers",
-        name="Python · Eq. (10) desde Tout",
-        customdata=table[["Err_Eta_Eq10_pct"]].to_numpy(),
-        hovertemplate="%{x}<br>η Python Eq.10 = %{y:.3f}%<br>Error = %{customdata[0]:.3f}%<extra></extra>",
-    ))
-    figure.add_trace(go.Scatter(
-        x=x,
-        y=table["Eta_Python_interna_pct"],
-        mode="lines",
-        name="η interna del modelo",
-        line={"dash": "dot"},
-        hovertemplate="%{x}<br>η interna = %{y:.3f}%<extra></extra>",
-    ))
+    for column, label in [
+        ("Qconv_ext_W", "Convección externa"),
+        ("Qrad_cielo_W", "Radiación al cielo"),
+        ("Qsoportes_W", "Soportes"),
+    ]:
+        figure.add_trace(
+            go.Bar(
+                x=x,
+                y=table[column],
+                name=label,
+                hovertemplate=f"%{{x}}<br>{label} = %{{y:.2f}} W<extra></extra>",
+            )
+        )
+    figure.add_trace(
+        go.Scatter(
+            x=x,
+            y=table["Qloss_requerido_W"],
+            mode="lines+markers",
+            name="Pérdida requerida · si Qsolar queda fija",
+            line={"width": 3},
+            hovertemplate="%{x}<br>Qloss requerida = %{y:.2f} W<extra></extra>",
+        )
+    )
     figure.update_layout(
-        title="Prueba simple · ¿la Ec. (10) cambia la forma de la eficiencia?",
+        title="¿Las pérdidas del modelo tienen la magnitud correcta?",
         xaxis_title="Mes",
-        yaxis_title="Eficiencia (%)",
-        height=460,
+        yaxis_title="Potencia térmica (W)",
+        barmode="stack",
+        height=450,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+    )
+    return figure
+
+
+def rea_required_factors_audit_figure(table: pd.DataFrame) -> go.Figure:
+    """Factores contrafactuales necesarios para cerrar Qútil de referencia."""
+    figure = go.Figure()
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        figure.update_layout(title="Sin datos para la auditoría energética")
+        return figure
+    x = table["Mes"].astype(str)
+    figure.add_hline(y=1.0, line_dash="dash", annotation_text="Sin corrección")
+    figure.add_trace(
+        go.Scatter(
+            x=x,
+            y=table["Factor_optico_requerido"],
+            mode="lines+markers",
+            name="Factor óptico requerido",
+            hovertemplate="%{x}<br>F óptico = %{y:.3f}<extra></extra>",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=x,
+            y=table["Factor_perdidas_requerido"],
+            mode="lines+markers",
+            name="Factor de pérdidas requerido",
+            hovertemplate="%{x}<br>F pérdidas = %{y:.3f}<extra></extra>",
+        )
+    )
+    figure.update_layout(
+        title="¿Basta una constante global para corregir el modelo?",
+        xaxis_title="Mes",
+        yaxis_title="Factor multiplicativo requerido (-)",
+        height=450,
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
     )

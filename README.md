@@ -74,7 +74,7 @@ Desde VSCode también puede abrir **Run and Debug** y seleccionar **Ejecutar int
 
 ## 4. Flujo de uso
 
-La interfaz V14.3 se organiza en cinco secciones principales:
+La interfaz V14.4 se organiza en cinco secciones principales:
 
 1. **Simulación**: resultados, análisis nodo por nodo y reporte/exportación. El botón **Ejecutar simulación** permanece en el encabezado superior derecho. Si la potencia solar absorbida es constante, la app omite el dashboard transitorio y muestra directamente el estado representativo/perfiles axiales.
 2. **Propiedades**: diagnóstico de irradiación, temperatura efectiva del cielo, perfil horario editable y propiedades termofísicas del HTF.
@@ -249,3 +249,10 @@ La navegación principal incluye ahora **Gráficos**, una vista de auditoría vi
 La sección **Validación** incorpora una prueba diagnóstica que no optimiza parámetros. Para cada mes de Rea Quille toma exactamente `Tin`, `Tamb`, `DNI` y `mdot` publicados, ejecuta el simulador, toma únicamente `Tout` y reconstruye posteriormente la eficiencia con `eta = mdot*Cp*(Tout-Tin)/(Aa*DNI)`. La interfaz grafica `Tout` y eficiencia, recalcula la eficiencia de la propia tabla para comprobar consistencia documental y compara la eficiencia Eq. (10) con el KPI interno del modelo.
 
 La prueba puede ejecutarse con los parámetros nominales o con la última calibración ya guardada de esa misma ciudad, pero nunca vuelve a calibrar. Su objetivo es distinguir un error de definición de KPI de un error de entradas o estructura física.
+
+
+## V14.4 · Auditoría mensual del balance energético
+
+La prueba simple de la Ec. (10) se retira de la interfaz después de confirmar que el KPI de eficiencia no era la causa principal de la discrepancia estacional. En su lugar, **Validación** incorpora una auditoría energética mensual que no optimiza parámetros: ejecuta cada mes con las entradas documentales de Rea Quille, separa potencia solar absorbida, potencia útil y pérdidas externas, y calcula dos factores contrafactuales `F_opt` y `F_loss`.
+
+La prueba está pensada para decidir qué bloque debe revisarse después: una corrección óptica global sólo es plausible si `F_opt` se mantiene aproximadamente constante entre meses; una corrección global de pérdidas sólo es plausible si `F_loss` es aproximadamente constante. Si alguno cruza 1 y cambia fuertemente con la estación, el problema es de dependencia funcional/ambiental y no de una única constante.

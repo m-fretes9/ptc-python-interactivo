@@ -18,7 +18,7 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
-from rea_eq10_validation import validate_rea_eq10_from_tout
+from rea_energy_audit import audit_rea_monthly_energy_balance
 from validations import (
     analyze_bhambare_numerical_convergence,
     analyze_bhambare_physical_sensitivity,
@@ -54,8 +54,9 @@ from visualizations import (
     validation_holdout_error_figure,
     validation_prediction_scatter_figure,
     validation_signed_residual_figure,
-    rea_eq10_tout_diagnostic_figure,
-    rea_eq10_efficiency_diagnostic_figure,
+    rea_energy_flow_audit_figure,
+    rea_loss_breakdown_audit_figure,
+    rea_required_factors_audit_figure,
 )
 
 
@@ -1312,15 +1313,24 @@ elif main_section == "Validación":
     )
 
     # ------------------------------------------------------------------
-    # Prueba simple solicitada: reconstruir eta exclusivamente desde Tout
-    # con la Ec. (10) de Rea Quille, sin volver a calibrar parámetros.
+    # Prueba diagnóstica 2: auditoría mensual del balance energético.
+    # La prueba anterior de la Ec. (10) fue descartada de la UI porque ya
+    # confirmó que el KPI no era el origen principal de la discrepancia.
     # ------------------------------------------------------------------
-    st.markdown("#### Prueba simple · Ec. (10) reconstruida desde Tout")
+    st.markdown("#### Prueba diagnóstica · balance energético mensual")
     st.write(
-        "Esta prueba no optimiza nada. Usa Tin, Tamb, DNI y caudal de cada mes exactamente como aparecen en Rea Quille, "
-        "ejecuta el modelo y toma únicamente **Tout**. Después recalcula la eficiencia como "
-        "η = ṁ·Cp·(Tout−Tin)/(Aa·DNI). Así podemos comprobar si la forma incorrecta de la curva venía de la definición del KPI."
+        "Esta prueba no calibra nada. Ejecuta cada mes con Tin, Tamb, DNI y caudal de Rea Quille y descompone "
+        "la potencia absorbida, la ganancia útil y las pérdidas por convección/radiación. Después calcula dos factores "
+        "contrafactuales para saber qué bloque merece la siguiente revisión."
     )
+    st.latex(r"F_{opt}=\frac{Q_{u,ref}+Q_{loss,modelo}}{Q_{solar,modelo}}")
+    st.latex(r"F_{loss}=\frac{Q_{solar,modelo}-Q_{u,ref}}{Q_{loss,modelo}}")
+    st.caption(
+        "Fopt responde cuánto tendría que escalarse la potencia solar absorbida si las pérdidas actuales fueran correctas. "
+        "Floss responde cuánto tendrían que escalarse las pérdidas si la potencia solar absorbida actual fuera correcta. "
+        "No son parámetros físicos identificados: son indicadores de diagnóstico."
+    )
+
     latest_calibration = st.session_state.validations.get("model_validation")
     compatible_latest = (
         isinstance(latest_calibration, dict)
@@ -1328,91 +1338,100 @@ elif main_section == "Validación":
         and isinstance(latest_calibration.get("parameter_table"), pd.DataFrame)
         and not latest_calibration.get("parameter_table").empty
     )
-    simple_cols = st.columns([1.25, 1.0])
-    source_options = ["Parámetros nominales"]
+    audit_cols = st.columns([1.25, 1.0])
+    audit_source_options = ["Parámetros nominales"]
     if compatible_latest:
-        source_options.append("Última calibración de esta ciudad")
-    simple_source = simple_cols[0].selectbox(
-        "Constantes usadas en esta prueba",
-        source_options,
-        key=f"rea_eq10_simple_source_{validation_case}",
-        help="La prueba nunca vuelve a optimizar. Si usa la última calibración, sólo aplica esos valores ya identificados.",
+        audit_source_options.append("Última calibración de esta ciudad")
+    audit_source = audit_cols[0].selectbox(
+        "Constantes usadas en la auditoría",
+        audit_source_options,
+        key=f"rea_energy_audit_source_{validation_case}",
+        help="La auditoría nunca optimiza. Puede inspeccionar el modelo nominal o aplicar una calibración ya existente.",
     )
-    run_simple_eq10 = simple_cols[1].button(
-        "Ejecutar prueba Eq. (10)",
+    run_energy_audit = audit_cols[1].button(
+        "Ejecutar auditoría energética",
         width="stretch",
-        key=f"run_rea_eq10_simple_{validation_case}",
+        key=f"run_rea_energy_audit_{validation_case}",
     )
-    if run_simple_eq10:
+    if run_energy_audit:
         try:
-            city_for_simple = "Foz do Iguaçu" if validation_case == "rea_foz" else "Alvorada do Norte"
-            calibration_for_simple = latest_calibration if simple_source.startswith("Última") else None
-            with st.spinner("Ejecutando los 12 meses y reconstruyendo η exclusivamente desde Tout..."):
-                st.session_state.validations["rea_eq10_simple_test"] = validate_rea_eq10_from_tout(
-                    city_for_simple,
+            city_for_audit = "Foz do Iguaçu" if validation_case == "rea_foz" else "Alvorada do Norte"
+            calibration_for_audit = latest_calibration if audit_source.startswith("Última") else None
+            with st.spinner("Ejecutando los 12 meses y auditando el balance energético..."):
+                st.session_state.validations["rea_energy_audit"] = audit_rea_monthly_energy_balance(
+                    city_for_audit,
                     fluid_db,
-                    calibration=calibration_for_simple,
+                    calibration=calibration_for_audit,
                 )
         except Exception as exc:
             st.exception(exc)
 
-    simple_test = st.session_state.validations.get("rea_eq10_simple_test")
-    if isinstance(simple_test, dict) and simple_test.get("case") == validation_case:
-        simple_table = simple_test["table"]
-        simple_metrics = simple_test["metrics"]
-        st.caption(f"Fuente de parámetros: {simple_test.get('parameter_source', '—')}")
-        diagnostic_metrics = st.columns(4)
-        diagnostic_metrics[0].metric("RMSE η · Eq.10", f"{simple_metrics['eta_rmse_pp']:.2f} pp")
-        diagnostic_metrics[1].metric("RMSE Tout", f"{simple_metrics['tout_rmse_C']:.3f} °C")
-        diagnostic_metrics[2].metric(
-            "Tabla Rea vs Eq.10",
-            f"{simple_metrics['max_reference_eq10_mismatch_pp']:.3f} pp",
-            help="Máxima diferencia entre η publicada y η recalculada usando Tout de la propia tabla.",
+    energy_audit = st.session_state.validations.get("rea_energy_audit")
+    if isinstance(energy_audit, dict) and energy_audit.get("case") == validation_case:
+        audit_table = energy_audit["table"]
+        audit_metrics = energy_audit["metrics"]
+        st.caption(f"Fuente de parámetros: {energy_audit.get('parameter_source', '—')}")
+
+        am = st.columns(6)
+        am[0].metric("RMSE η actual", f"{audit_metrics['eta_rmse_pp']:.2f} pp")
+        am[1].metric(
+            "F óptico medio",
+            f"{audit_metrics['opt_factor_mean']:.3f}",
+            help="1.0 significa que, en promedio, no haría falta escalar la potencia solar absorbida.",
         )
-        diagnostic_metrics[3].metric(
-            "η interna vs Eq.10",
-            f"{simple_metrics['max_python_native_eq10_mismatch_pp']:.4f} pp",
-            help="Si es casi cero, cambiar la definición del KPI no cambia la curva Python en este preset mensual.",
+        am[2].metric(
+            "Variación F óptico",
+            f"{audit_metrics['opt_factor_cv_pct']:.1f} %",
+            help="Coeficiente de variación entre meses. Cuanto menor, más plausible es una única corrección óptica global.",
+        )
+        am[3].metric("F pérdidas medio", f"{audit_metrics['loss_factor_mean']:.3f}")
+        am[4].metric(
+            "Variación F pérdidas",
+            f"{audit_metrics['loss_factor_cv_pct']:.1f} %",
+            help="Si es grande, un único coeficiente global de pérdidas no puede corregir toda la forma estacional.",
+        )
+        am[5].metric(
+            "Meses sin energía óptica suficiente",
+            f"{audit_metrics['months_optically_insufficient']}",
+            help="Meses en que ni siquiera Qloss=0 permitiría alcanzar el calor útil de referencia con la absorción solar actual.",
         )
 
-        if simple_metrics["max_reference_eq10_mismatch_pp"] < 0.5:
-            st.success(
-                "La eficiencia publicada es internamente consistente con la Ec. (10): las diferencias al reconstruirla desde Tin/Tout/DNI son pequeñas."
-            )
-        if simple_metrics["max_python_native_eq10_mismatch_pp"] < 0.05:
-            st.warning(
-                "Diagnóstico: la eficiencia interna del modelo y la eficiencia reconstruida por Ec. (10) prácticamente coinciden. "
-                "Si las dos curvas se superponen abajo, la definición del KPI **no** es la causa de la forma estacional incorrecta; el siguiente paso será revisar entradas/estructura física."
-            )
-        else:
-            st.info(
-                "La reconstrucción por Ec. (10) sí modifica de forma apreciable la eficiencia respecto del KPI interno. Compare las curvas para cuantificar cuánto explica."
-            )
+        for message in energy_audit.get("diagnosis", []):
+            if "no puede" in message or "incorrecta" in message or "insuficiente" in message:
+                st.warning(message)
+            else:
+                st.info(message)
 
-        eq10_plot_cols = st.columns(2)
-        with eq10_plot_cols[0]:
+        audit_plot_cols = st.columns(2)
+        with audit_plot_cols[0]:
             st.plotly_chart(
-                rea_eq10_tout_diagnostic_figure(simple_table),
+                rea_energy_flow_audit_figure(audit_table),
                 width="stretch",
-                key=f"rea_eq10_tout_plot_{validation_case}",
+                key=f"rea_energy_flow_audit_{validation_case}",
             )
-        with eq10_plot_cols[1]:
+        with audit_plot_cols[1]:
             st.plotly_chart(
-                rea_eq10_efficiency_diagnostic_figure(simple_table),
+                rea_loss_breakdown_audit_figure(audit_table),
                 width="stretch",
-                key=f"rea_eq10_eta_plot_{validation_case}",
+                key=f"rea_loss_breakdown_audit_{validation_case}",
             )
-        with st.expander("Ver datos exactos de la prueba Eq. (10)", expanded=False):
-            st.dataframe(simple_table, width="stretch", hide_index=True)
+        st.plotly_chart(
+            rea_required_factors_audit_figure(audit_table),
+            width="stretch",
+            key=f"rea_required_factors_audit_{validation_case}",
+        )
+
+        with st.expander("Ver datos exactos de la auditoría energética", expanded=False):
+            st.dataframe(audit_table, width="stretch", hide_index=True)
             st.download_button(
-                "Descargar prueba Eq. (10) · CSV",
-                data=simple_table.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"prueba_eq10_{validation_case}.csv",
+                "Descargar auditoría energética · CSV",
+                data=audit_table.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"auditoria_energetica_{validation_case}.csv",
                 mime="text/csv",
                 width="stretch",
-                key=f"download_rea_eq10_simple_{validation_case}",
+                key=f"download_rea_energy_audit_{validation_case}",
             )
-        st.caption(simple_test.get("note", ""))
+        st.caption(energy_audit.get("note", ""))
 
     st.divider()
 
