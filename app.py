@@ -18,11 +18,12 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
-from rea_loss_component_audit import audit_rea_loss_components
-from rea_loss_component_charts import (
-    rea_loss_component_magnitude_figure,
-    rea_loss_component_factors_figure,
-    rea_loss_component_counterfactual_figure,
+from rea_external_flow_audit import audit_rea_external_flow
+from rea_external_flow_charts import (
+    external_h_figure,
+    external_wind_figure,
+    external_dimensionless_figure,
+    external_temperature_figure,
 )
 from validations import (
     analyze_bhambare_numerical_convergence,
@@ -1315,21 +1316,21 @@ elif main_section == "Validación":
     )
 
     # ------------------------------------------------------------------
-    # Prueba diagnóstica 3: separar pérdidas convectivas y radiativas.
-    # La auditoría global anterior fue retirada de la UI después de mostrar
-    # que las pérdidas externas merecían una inspección por componentes.
+    # Prueba diagnóstica 4: abrir la convección externa.
+    # La auditoría convección/radiación anterior fue retirada de la UI
+    # después de identificar la convección externa como bloque prioritario.
     # ------------------------------------------------------------------
-    st.markdown("#### Prueba diagnóstica · convección externa vs radiación al cielo")
+    st.markdown("#### Prueba diagnóstica · auditoría de flujo externo")
     st.write(
-        "Esta prueba no calibra nada. Mantiene fija la potencia solar absorbida y separa las pérdidas externas del receptor. "
-        "Para cada mes pregunta cuánto tendría que cambiar solamente la convección o solamente la radiación al cielo para que "
-        "la potencia útil coincida con Rea Quille, dejando el otro mecanismo intacto."
+        "Esta prueba no calibra nada. Abre la correlación de convección externa usada por el modelo "
+        "(Churchill–Bernstein para cilindro en flujo cruzado) y muestra, mes a mes, la temperatura de película, "
+        "Reynolds, Nusselt, h externo y el h que sería necesario para cerrar el balance con Rea Quille."
     )
-    st.latex(r"k_{conv}=\frac{Q_{solar}-Q_{storage}-Q_{u,ref}-Q_{rad}-Q_{sup}}{Q_{conv}}")
-    st.latex(r"k_{rad}=\frac{Q_{solar}-Q_{storage}-Q_{u,ref}-Q_{conv}-Q_{sup}}{Q_{rad}}")
+    st.latex(r"Re_D=\frac{\rho_{air}v_wD}{\mu_{air}},\qquad h=\frac{Nu_D k_{air}}{D}")
+    st.latex(r"Q_{conv}=h\,\pi D L\,(T_s-T_{amb})")
     st.caption(
-        "Interpretación: k=1 significa que el componente ya tiene la magnitud requerida; 0<k<1 significa que ese mecanismo pierde demasiado; "
-        "k>1 significa que pierde demasiado poco; k<0 indica que eliminar por completo ese mecanismo no bastaría para cerrar la referencia."
+        "Además se calcula un viento implícito requerido usando exactamente la misma correlación y congelando el campo de temperaturas. "
+        "Ese viento es un diagnóstico local: no se guarda ni se interpreta como dato meteorológico medido."
     )
 
     latest_calibration = st.session_state.validations.get("model_validation")
@@ -1339,27 +1340,27 @@ elif main_section == "Validación":
         and isinstance(latest_calibration.get("parameter_table"), pd.DataFrame)
         and not latest_calibration.get("parameter_table").empty
     )
-    loss_cols = st.columns([1.25, 1.0])
-    loss_source_options = ["Parámetros nominales"]
+    flow_cols = st.columns([1.25, 1.0])
+    flow_source_options = ["Parámetros nominales"]
     if compatible_latest:
-        loss_source_options.append("Última calibración de esta ciudad")
-    loss_source = loss_cols[0].selectbox(
+        flow_source_options.append("Última calibración de esta ciudad")
+    flow_source = flow_cols[0].selectbox(
         "Constantes usadas en la prueba",
-        loss_source_options,
-        key=f"rea_loss_component_source_{validation_case}",
-        help="La prueba nunca optimiza. Puede inspeccionar el modelo nominal o aplicar una calibración ya existente.",
+        flow_source_options,
+        key=f"rea_external_flow_source_{validation_case}",
+        help="La auditoría nunca optimiza. Puede inspeccionar el modelo nominal o aplicar una calibración ya existente.",
     )
-    run_loss_component_audit = loss_cols[1].button(
-        "Ejecutar prueba de pérdidas",
+    run_external_flow_audit = flow_cols[1].button(
+        "Ejecutar auditoría de flujo externo",
         width="stretch",
-        key=f"run_rea_loss_component_audit_{validation_case}",
+        key=f"run_rea_external_flow_audit_{validation_case}",
     )
-    if run_loss_component_audit:
+    if run_external_flow_audit:
         try:
             city_for_audit = "Foz do Iguaçu" if validation_case == "rea_foz" else "Alvorada do Norte"
-            calibration_for_audit = latest_calibration if loss_source.startswith("Última") else None
-            with st.spinner("Ejecutando los 12 meses y separando convección/radiación..."):
-                st.session_state.validations["rea_loss_component_audit"] = audit_rea_loss_components(
+            calibration_for_audit = latest_calibration if flow_source.startswith("Última") else None
+            with st.spinner("Ejecutando los 12 meses y abriendo Re/Nu/h externo..."):
+                st.session_state.validations["rea_external_flow_audit"] = audit_rea_external_flow(
                     city_for_audit,
                     fluid_db,
                     calibration=calibration_for_audit,
@@ -1367,81 +1368,83 @@ elif main_section == "Validación":
         except Exception as exc:
             st.exception(exc)
 
-    loss_audit = st.session_state.validations.get("rea_loss_component_audit")
-    if isinstance(loss_audit, dict) and loss_audit.get("case") == validation_case:
-        loss_table = loss_audit["table"]
-        loss_metrics = loss_audit["metrics"]
-        st.caption(f"Fuente de parámetros: {loss_audit.get('parameter_source', '—')}")
+    flow_audit = st.session_state.validations.get("rea_external_flow_audit")
+    if isinstance(flow_audit, dict) and flow_audit.get("case") == validation_case:
+        flow_table = flow_audit["table"]
+        flow_metrics = flow_audit["metrics"]
+        st.caption(f"Fuente de parámetros: {flow_audit.get('parameter_source', '—')}")
 
-        lm = st.columns(6)
-        lm[0].metric("RMSE η actual", f"{loss_metrics['eta_rmse_base_pp']:.2f} pp")
-        lm[1].metric(
-            "k conv global",
-            f"{loss_metrics['kconv_global_ls']:.3f}",
-            help="Mejor multiplicador único de Qconv por mínimos cuadrados. Es diagnóstico, no se aplica al modelo.",
+        fm = st.columns(6)
+        fm[0].metric("Viento asumido", f"{flow_metrics['current_wind_mean_m_s']:.2f} m/s")
+        fm[1].metric(
+            "Viento requerido · media",
+            f"{flow_metrics['required_wind_mean_m_s']:.2f} m/s" if np.isfinite(flow_metrics['required_wind_mean_m_s']) else "—",
         )
-        lm[2].metric(
-            "RMSE con k conv",
-            f"{loss_metrics['eta_rmse_kconv_global_pp']:.2f} pp",
+        fm[2].metric(
+            "Rango viento requerido",
+            (f"{flow_metrics['required_wind_min_m_s']:.2f}–{flow_metrics['required_wind_max_m_s']:.2f} m/s"
+             if np.isfinite(flow_metrics['required_wind_min_m_s']) else "—"),
         )
-        lm[3].metric(
-            "k rad global",
-            f"{loss_metrics['krad_global_ls']:.3f}",
-            help="Mejor multiplicador único de Qrad por mínimos cuadrados. Es diagnóstico, no se aplica al modelo.",
-        )
-        lm[4].metric(
-            "RMSE con k rad",
-            f"{loss_metrics['eta_rmse_krad_global_pp']:.2f} pp",
-        )
-        lm[5].metric(
-            "Prioridad sugerida",
-            str(loss_metrics.get("preferred_component", "—")),
-        )
+        fm[3].metric("h modelo · media", f"{flow_metrics['h_model_mean_W_m2K']:.2f} W/m²K")
+        fm[4].metric("h requerido · media", f"{flow_metrics['h_required_mean_W_m2K']:.2f} W/m²K")
+        fm[5].metric("Variación factor h", f"{flow_metrics['h_factor_cv_pct']:.1f} %")
 
-        detail_cols = st.columns(4)
-        detail_cols[0].metric("Convección · fracción media", f"{loss_metrics['conv_share_mean_pct']:.1f} %")
-        detail_cols[1].metric("Variación k conv", f"{loss_metrics['conv_factor_cv_pct']:.1f} %")
-        detail_cols[2].metric("Radiación · fracción media", f"{loss_metrics['rad_share_mean_pct']:.1f} %")
-        detail_cols[3].metric("Variación k rad", f"{loss_metrics['rad_factor_cv_pct']:.1f} %")
+        fm2 = st.columns(5)
+        fm2[0].metric("Re externo · media", f"{flow_metrics['Re_model_mean']:.0f}")
+        fm2[1].metric("Nu externo · media", f"{flow_metrics['Nu_model_mean']:.2f}")
+        fm2[2].metric("Rango T película", f"{flow_metrics['film_temp_range_K']:.1f} K")
+        fm2[3].metric(
+            "CV viento requerido",
+            f"{flow_metrics['required_wind_cv_pct']:.1f} %" if np.isfinite(flow_metrics['required_wind_cv_pct']) else "—",
+        )
+        fm2[4].metric("Meses con solución de viento", f"{flow_metrics['wind_solution_months']}/{len(flow_table)}")
 
-        for message in loss_audit.get("diagnosis", []):
-            if "no puede" in message or "negativo" in message:
+        for message in flow_audit.get("diagnosis", []):
+            if "no puede" in message or "no puede" in message.lower():
                 st.warning(message)
-            elif "Prioridad" in message:
-                st.success(message)
-            else:
+            elif "merece" in message.lower() or "conviene" in message.lower():
                 st.info(message)
+            else:
+                st.success(message) if "estacional" in message.lower() else st.info(message)
 
-        loss_plot_cols = st.columns(2)
-        with loss_plot_cols[0]:
+        flow_plot_cols = st.columns(2)
+        with flow_plot_cols[0]:
             st.plotly_chart(
-                rea_loss_component_magnitude_figure(loss_table),
+                external_h_figure(flow_table),
                 width="stretch",
-                key=f"rea_loss_component_magnitude_{validation_case}",
+                key=f"rea_external_h_{validation_case}",
             )
-        with loss_plot_cols[1]:
+        with flow_plot_cols[1]:
             st.plotly_chart(
-                rea_loss_component_factors_figure(loss_table),
+                external_wind_figure(flow_table),
                 width="stretch",
-                key=f"rea_loss_component_factors_{validation_case}",
+                key=f"rea_external_wind_{validation_case}",
             )
-        st.plotly_chart(
-            rea_loss_component_counterfactual_figure(loss_table, loss_metrics),
-            width="stretch",
-            key=f"rea_loss_component_counterfactual_{validation_case}",
-        )
+        flow_plot_cols_2 = st.columns(2)
+        with flow_plot_cols_2[0]:
+            st.plotly_chart(
+                external_dimensionless_figure(flow_table),
+                width="stretch",
+                key=f"rea_external_dimensionless_{validation_case}",
+            )
+        with flow_plot_cols_2[1]:
+            st.plotly_chart(
+                external_temperature_figure(flow_table),
+                width="stretch",
+                key=f"rea_external_temperature_{validation_case}",
+            )
 
-        with st.expander("Ver datos exactos de la prueba de pérdidas", expanded=False):
-            st.dataframe(loss_table, width="stretch", hide_index=True)
+        with st.expander("Ver datos exactos de la auditoría de flujo externo", expanded=False):
+            st.dataframe(flow_table, width="stretch", hide_index=True)
             st.download_button(
-                "Descargar auditoría convección/radiación · CSV",
-                data=loss_table.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"auditoria_perdidas_componentes_{validation_case}.csv",
+                "Descargar auditoría de flujo externo · CSV",
+                data=flow_table.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"auditoria_flujo_externo_{validation_case}.csv",
                 mime="text/csv",
                 width="stretch",
-                key=f"download_rea_loss_component_audit_{validation_case}",
+                key=f"download_rea_external_flow_audit_{validation_case}",
             )
-        st.caption(loss_audit.get("note", ""))
+        st.caption(flow_audit.get("note", ""))
 
     st.divider()
 

@@ -1,0 +1,9 @@
+V14.6 — Auditoría de flujo externo
+
+- Retira de la interfaz la auditoría previa convección vs radiación de V14.5.
+- Añade `rea_external_flow_audit.py` para abrir el término convectivo externo mes a mes.
+- Reporta T de superficie, T de película, propiedades del aire, Re, Pr, Nu y h.
+- Calcula h requerido para cerrar el balance de Rea Quille con el resto de mecanismos congelados.
+- Calcula el viento implícito requerido usando exactamente la correlación Churchill–Bernstein del modelo.
+- Añade cuatro gráficos independientes en `rea_external_flow_charts.py`.
+- No modifica la correlación, el viento del preset ni ningún parámetro físico; es una etapa puramente diagnóstica.
