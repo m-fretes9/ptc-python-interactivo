@@ -1,0 +1,10 @@
+V14.8 — Prueba diagnóstica de agregación temporal de irradiancia
+
+- Se retira de la interfaz la prueba V14.7 de viento meteorológico mensual.
+- El viento vuelve a quedar congelado en esta etapa: la hipótesis nueva modifica únicamente la distribución temporal del DNI.
+- Nueva prueba controlada f(DNI medio) vs promedio[f(DNI(t))].
+- Para cada mes se construye un día solar representativo y se escala el perfil para conservar exactamente el DNI medio publicado por Rea Quille.
+- Tin, Tamb, caudal, viento, óptica e incidencia permanecen invariantes entre escenarios.
+- Cada punto del día se resuelve cuasiestacionariamente con N=6; la eficiencia temporal se calcula a partir de la potencia útil media y la misma energía solar media.
+- Nuevos gráficos: perfil de DNI, eficiencia mensual, Tout mensual y gap de agregación/Jensen.
+- Exportación CSV del resumen mensual y de todos los puntos temporales.

@@ -18,16 +18,12 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
-from rea_meteorological_wind_test import (
-    foz_weatherspark_wind_10m,
-    fetch_nasa_power_ws10m_climatology,
-    run_monthly_wind_hypothesis,
-)
-from rea_meteorological_wind_charts import (
-    wind_input_figure,
-    wind_eta_figure,
-    wind_tout_figure,
-    wind_convection_figure,
+from rea_temporal_aggregation_test import run_temporal_aggregation_hypothesis
+from rea_temporal_aggregation_charts import (
+    temporal_profile_figure,
+    temporal_eta_figure,
+    temporal_tout_figure,
+    temporal_jensen_gap_figure,
 )
 from validations import (
     analyze_bhambare_numerical_convergence,
@@ -1320,183 +1316,150 @@ elif main_section == "Validación":
     )
 
     # ------------------------------------------------------------------
-    # Prueba diagnóstica 5: sustituir el viento fijo por meteorología
-    # independiente. La auditoría de flujo externo anterior se retira de
-    # la interfaz después de identificar al viento fijo de 1 m/s como
-    # hipótesis ambiental prioritaria a comprobar.
+    # Prueba diagnóstica 6: sesgo por agregación temporal.
+    # La prueba de viento meteorológico se retira después de mostrar que
+    # cambiar únicamente v_w empeora el ajuste y no corrige la forma.
     # ------------------------------------------------------------------
-    st.markdown("#### Prueba diagnóstica · viento meteorológico mensual")
+    st.markdown("#### Prueba diagnóstica · agregación temporal de irradiancia")
     st.write(
-        "Esta prueba no calibra ninguna constante del colector. Mantiene exactamente el mismo modelo y cambia solamente "
-        "la entrada de viento: compara el supuesto fijo de 1 m/s contra una serie mensual independiente."
+        "Esta prueba mantiene congelados Tin, Tamb, caudal, viento y todas las constantes del colector. "
+        "Compara el modelo mensual actual, evaluado una vez con el DNI medio de Rea, contra el promedio de varias "
+        "respuestas cuasiestacionarias a un perfil solar representativo que conserva exactamente el mismo DNI medio."
     )
-    st.latex(r"v(z)=v_{10}\left(\frac{z}{10}\right)^{\alpha}")
+    st.latex(r"f(\overline{DNI})\;\;\stackrel{?}{=}\;\;\overline{f(DNI(t))}")
+    st.latex(
+        r"\eta_{temporal}=100\,\frac{\overline{\dot Q_u(DNI(t))}}{A_a\,\overline{DNI(t)}}"
+    )
     st.caption(
-        "Los datos climatológicos se expresan a 10 m. Si se activa la corrección de altura, la velocidad se traslada a una "
-        "altura efectiva del receptor mediante una ley de potencia. La altura y α son hipótesis explícitas del ensayo."
+        "No es una reconstrucción horaria completa del TRNSYS. Es una prueba controlada del efecto de no linealidad: "
+        "la energía solar media se conserva y solamente cambia su distribución durante un día solar representativo."
     )
 
-    wind_source_options = ["Serie manual editable", "NASA POWER WS10M · climatología online"]
-    if validation_case == "rea_foz":
-        wind_source_options.insert(0, "WeatherSpark / NASA MERRA-2 · Foz · 10 m")
-
-    source_col, height_col, alpha_col = st.columns([1.55, 0.8, 0.8])
-    wind_source = source_col.selectbox(
-        "Fuente de viento mensual",
-        wind_source_options,
-        key=f"wind_hypothesis_source_{validation_case}",
+    agg_cols = st.columns([1.0, 1.0, 2.0])
+    agg_bins = agg_cols[0].select_slider(
+        "Puntos del día",
+        options=[5, 7, 9, 11, 13],
+        value=7,
+        key=f"temporal_aggregation_bins_{validation_case}",
+        help="Cada punto se resuelve cuasiestacionariamente. Más puntos aumentan el costo computacional.",
     )
-    apply_height = source_col.checkbox(
-        "Ajustar viento de 10 m a altura del receptor",
-        value=True,
-        key=f"wind_height_adjust_{validation_case}",
-    )
-    receiver_height = height_col.number_input(
-        "Altura efectiva (m)",
-        min_value=0.05,
-        max_value=10.0,
-        value=1.0,
-        step=0.1,
-        disabled=not apply_height,
-        key=f"wind_receiver_height_{validation_case}",
-    )
-    wind_alpha = alpha_col.number_input(
-        "Exponente α",
-        min_value=0.0,
-        max_value=0.6,
-        value=0.14,
+    agg_B = agg_cols[1].number_input(
+        "Forma atmosférica B",
+        min_value=0.00,
+        max_value=0.50,
+        value=0.15,
         step=0.01,
-        disabled=not apply_height,
-        key=f"wind_power_alpha_{validation_case}",
+        key=f"temporal_aggregation_B_{validation_case}",
+        help="Controla únicamente la forma relativa del DNI durante el día. El perfil se reescala para conservar el DNI medio publicado.",
+    )
+    agg_cols[2].info(
+        "Control del ensayo: incidencia normal (θ=0), misma óptica, mismo viento y misma meteorología mensual. "
+        "El perfil horario no introduce tracking ni cambia la energía solar media."
     )
 
-    wind_state_key = f"wind_series_{validation_case}"
-    if wind_state_key not in st.session_state:
-        if validation_case == "rea_foz":
-            st.session_state[wind_state_key] = foz_weatherspark_wind_10m()
-        else:
-            st.session_state[wind_state_key] = pd.DataFrame({
-                "Mes": ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"],
-                "Viento_10m_m_s": [1.0] * 12,
-                "Fuente": ["Manual / pendiente"] * 12,
-            })
-
-    if wind_source.startswith("WeatherSpark") and validation_case == "rea_foz":
-        st.session_state[wind_state_key] = foz_weatherspark_wind_10m()
-    elif wind_source.startswith("NASA POWER"):
-        fetch_col, info_col = st.columns([0.8, 2.2])
-        if fetch_col.button(
-            "Cargar NASA POWER",
-            width="stretch",
-            key=f"fetch_nasa_power_wind_{validation_case}",
-        ):
-            try:
-                with st.spinner("Consultando WS10M climatológico en NASA POWER..."):
-                    st.session_state[wind_state_key] = fetch_nasa_power_ws10m_climatology(validation_case)
-                st.success("Serie NASA POWER cargada.")
-            except Exception as exc:
-                st.error(f"No fue posible consultar NASA POWER: {exc}")
-        info_col.caption(
-            "WS10M es velocidad media del viento a 10 m. Si el servidor no tiene acceso externo, edite la tabla manualmente."
-        )
-
-    wind_editor = st.data_editor(
-        st.session_state[wind_state_key],
+    run_aggregation_test = st.button(
+        "Ejecutar prueba de agregación temporal",
         width="stretch",
-        hide_index=True,
-        disabled=["Mes", "Fuente"],
-        key=f"wind_hypothesis_editor_{validation_case}",
+        key=f"run_temporal_aggregation_{validation_case}",
     )
-    st.session_state[wind_state_key] = wind_editor
-
-    run_wind_test = st.button(
-        "Ejecutar prueba de viento meteorológico",
-        width="stretch",
-        key=f"run_wind_hypothesis_{validation_case}",
-    )
-    if run_wind_test:
+    if run_aggregation_test:
         try:
-            winds = pd.to_numeric(wind_editor["Viento_10m_m_s"], errors="raise").to_numpy(dtype=float)
-            with st.spinner("Ejecutando 12 meses con viento fijo y 12 meses con viento meteorológico..."):
-                st.session_state.validations["rea_wind_hypothesis"] = run_monthly_wind_hypothesis(
+            with st.spinner(
+                f"Ejecutando 12 meses: DNI medio vs {int(agg_bins)} estados solares representativos por mes..."
+            ):
+                st.session_state.validations["rea_temporal_aggregation"] = run_temporal_aggregation_hypothesis(
                     validation_case,
                     fluid_db,
-                    winds,
-                    apply_height_adjustment=apply_height,
-                    receiver_height_m=receiver_height,
-                    alpha=wind_alpha,
+                    n_bins=int(agg_bins),
+                    atmospheric_B=float(agg_B),
                 )
         except Exception as exc:
             st.exception(exc)
 
-    wind_test = st.session_state.validations.get("rea_wind_hypothesis")
-    if isinstance(wind_test, dict) and wind_test.get("case") == validation_case:
-        wt = wind_test["table"]
-        wm = wind_test["metrics"]
-        verdict = wind_test.get("verdict", "inconclusa")
+    aggregation_test = st.session_state.validations.get("rea_temporal_aggregation")
+    if isinstance(aggregation_test, dict) and aggregation_test.get("case") == validation_case:
+        at = aggregation_test["table"]
+        ap = aggregation_test["profiles"]
+        am = aggregation_test["metrics"]
+        verdict = aggregation_test.get("verdict", "inconclusa")
 
         metric_cols = st.columns(6)
-        metric_cols[0].metric("RMSE η · fijo", f"{wm['eta_base']['rmse']:.2f} pp")
+        metric_cols[0].metric("RMSE η · DNI medio", f"{am['eta_mean_input']['rmse']:.2f} pp")
         metric_cols[1].metric(
-            "RMSE η · meteo",
-            f"{wm['eta_meteo']['rmse']:.2f} pp",
-            delta=f"{wm['eta_meteo']['rmse'] - wm['eta_base']['rmse']:+.2f} pp",
+            "RMSE η · temporal",
+            f"{am['eta_temporal']['rmse']:.2f} pp",
+            delta=f"{am['eta_temporal']['rmse'] - am['eta_mean_input']['rmse']:+.2f} pp",
             delta_color="inverse",
         )
-        metric_cols[2].metric("r η · fijo", f"{wm['eta_base']['corr']:.3f}")
+        metric_cols[2].metric("r η · DNI medio", f"{am['eta_mean_input']['corr']:.3f}")
         metric_cols[3].metric(
-            "r η · meteo",
-            f"{wm['eta_meteo']['corr']:.3f}",
-            delta=f"{wm['eta_corr_delta']:+.3f}",
+            "r η · temporal",
+            f"{am['eta_temporal']['corr']:.3f}",
+            delta=f"{am['eta_corr_delta']:+.3f}",
         )
-        metric_cols[4].metric("Viento usado · media", f"{wm['wind_used_mean_m_s']:.2f} m/s")
-        metric_cols[5].metric("ΔQconv · media", f"{wm['qconv_delta_mean_W']:+.1f} W")
+        metric_cols[4].metric("|Δη| medio", f"{am['mean_abs_jensen_gap_pp']:.2f} pp")
+        metric_cols[5].metric("DNI pico máx.", f"{am['max_profile_dni_W_m2']:.0f} W/m²")
 
         if verdict == "apoya":
-            st.success(wind_test["diagnosis"])
+            st.success(aggregation_test["diagnosis"])
         elif verdict == "rechaza":
-            st.warning(wind_test["diagnosis"])
+            st.warning(aggregation_test["diagnosis"])
         else:
-            st.info(wind_test["diagnosis"])
+            st.info(aggregation_test["diagnosis"])
 
         p1, p2 = st.columns(2)
         with p1:
             st.plotly_chart(
-                wind_input_figure(wt),
+                temporal_eta_figure(at),
                 width="stretch",
-                key=f"wind_hypothesis_input_{validation_case}",
+                key=f"temporal_aggregation_eta_{validation_case}",
             )
         with p2:
-            st.plotly_chart(
-                wind_eta_figure(wt),
-                width="stretch",
-                key=f"wind_hypothesis_eta_{validation_case}",
+            selected_profile_month = st.selectbox(
+                "Mes mostrado en el perfil diario",
+                at["Mes"].astype(str).tolist(),
+                index=6 if len(at) > 6 else 0,
+                key=f"temporal_profile_month_{validation_case}",
             )
+            st.plotly_chart(
+                temporal_profile_figure(ap, selected_profile_month),
+                width="stretch",
+                key=f"temporal_aggregation_profile_{validation_case}_{selected_profile_month}",
+            )
+
         p3, p4 = st.columns(2)
         with p3:
             st.plotly_chart(
-                wind_tout_figure(wt),
+                temporal_tout_figure(at),
                 width="stretch",
-                key=f"wind_hypothesis_tout_{validation_case}",
+                key=f"temporal_aggregation_tout_{validation_case}",
             )
         with p4:
             st.plotly_chart(
-                wind_convection_figure(wt),
+                temporal_jensen_gap_figure(at),
                 width="stretch",
-                key=f"wind_hypothesis_qconv_{validation_case}",
+                key=f"temporal_aggregation_gap_{validation_case}",
             )
 
-        with st.expander("Ver datos exactos de la prueba de viento", expanded=False):
-            st.dataframe(wt, width="stretch", hide_index=True)
+        with st.expander("Ver datos exactos de la prueba de agregación temporal", expanded=False):
+            st.dataframe(at, width="stretch", hide_index=True)
             st.download_button(
-                "Descargar prueba de viento · CSV",
-                data=wt.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"prueba_viento_meteorologico_{validation_case}.csv",
+                "Descargar resumen mensual · CSV",
+                data=at.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"prueba_agregacion_temporal_{validation_case}.csv",
                 mime="text/csv",
                 width="stretch",
-                key=f"download_wind_hypothesis_{validation_case}",
+                key=f"download_temporal_aggregation_{validation_case}",
             )
-        st.caption(wind_test.get("note", ""))
+            st.download_button(
+                "Descargar perfiles temporales · CSV",
+                data=ap.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"perfiles_agregacion_temporal_{validation_case}.csv",
+                mime="text/csv",
+                width="stretch",
+                key=f"download_temporal_profiles_{validation_case}",
+            )
+        st.caption(aggregation_test.get("note", ""))
 
     st.divider()
 

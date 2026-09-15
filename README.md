@@ -282,3 +282,11 @@ El viento implícito requerido es sólo un diagnóstico local; no se interpreta 
 ## V14.7 — prueba de viento meteorológico mensual
 
 La validación Rea mensual incluye una prueba diagnóstica que mantiene congeladas las constantes del colector y cambia únicamente la entrada de viento. El baseline de 1 m/s se compara contra una serie mensual independiente a 10 m, con corrección opcional a la altura efectiva del receptor mediante una ley de potencia. El viento ya no se ofrece como parámetro de calibración en Rea mensual: se considera una entrada meteorológica.
+
+## V14.8 — hipótesis de agregación temporal del DNI
+
+La prueba de viento meteorológico de V14.7 se retira de la interfaz tras mostrar que, para Foz, aumenta las pérdidas convectivas y empeora el ajuste sin corregir la forma anual. La nueva prueba mantiene viento, Tin, Tamb, caudal, óptica e incidencia congelados y modifica exclusivamente la distribución temporal de la irradiancia.
+
+Para cada mes se construye un día solar representativo en hora solar. El perfil relativo de DNI sigue una forma de cielo claro `exp(-B/cos(z))` y se reescala para que su media durante las horas solares sea exactamente igual al DNI mensual publicado. La app compara el caso histórico `f(DNI_medio)` contra el promedio de varios estados cuasiestacionarios `promedio[f(DNI(t))]`, calcula la eficiencia integrada por potencia útil media y muestra el gap de agregación mes a mes.
+
+La prueba no calibra parámetros y no pretende reconstruir el TRNSYS hora a hora. Su objetivo es comprobar de forma aislada si la no linealidad del PTC hace que trabajar directamente con promedios mensuales distorsione la curva de eficiencia.
