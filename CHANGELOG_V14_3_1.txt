@@ -1,0 +1,6 @@
+V14.3.1 — Hotfix de importación Ec. (10)
+
+- Corrige ImportError: validate_rea_eq10_from_tout.
+- La prueba Ec. (10) ahora vive en rea_eq10_validation.py y app.py la importa desde ese módulo independiente.
+- Evita que una actualización parcial/stale de validations.py impida arrancar toda la aplicación.
+- No cambia ecuaciones, resultados, calibraciones ni gráficos.

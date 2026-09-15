@@ -1,0 +1,9 @@
+V14.3 · Prueba simple Eq. (10) desde Tout
+
+- Añade en Validación una prueba diagnóstica sin optimización para Rea Quille Foz/Alvorada.
+- Para cada mes usa Tin, Tamb, DNI y mdot publicados, ejecuta el simulador y toma sólo Tout.
+- Reconstruye η con la Ec. (10): mdot*Cp*(Tout-Tin)/(Aa*DNI).
+- Recalcula también η de referencia desde Tout publicado para auditar consistencia de Tablas 10/11.
+- Compara η reconstruida con el KPI interno del modelo para determinar si la definición de eficiencia altera la curva.
+- Incluye dos gráficos, métricas, tabla completa y exportación CSV.
+- Puede ejecutarse con parámetros nominales o con la última calibración guardada de la misma ciudad, sin recalibrar.

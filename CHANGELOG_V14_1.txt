@@ -1,0 +1,10 @@
+PTC Python Interactivo — V14.1
+
+Correcciones de compatibilidad Streamlit 1.56+:
+- Se asignan keys explícitas y únicas a todos los st.plotly_chart.
+  Esto evita StreamlitDuplicateElementId cuando dos pestañas renderizan axial_profiles en el mismo rerun.
+- Se sustituye use_container_width=True por width="stretch".
+- Se sustituye components.html por st.iframe para los visuales HTML/JS del PTC y circuito térmico.
+- requirements.txt eleva Streamlit mínimo a 1.56.0.
+
+No se modificaron ecuaciones, correlaciones, calibraciones ni resultados físicos.

@@ -18,6 +18,7 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
+from rea_eq10_validation import validate_rea_eq10_from_tout
 from validations import (
     analyze_bhambare_numerical_convergence,
     analyze_bhambare_physical_sensitivity,
@@ -35,7 +36,6 @@ from validations import (
     validate_active_preset,
     validate_bhambare,
     validate_rea_quille_city_monthly,
-    validate_rea_eq10_from_tout,
     validate_tcc_monthly,
 )
 from visualizations import (

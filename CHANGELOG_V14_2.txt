@@ -1,0 +1,11 @@
+V14.2 — Ventana Gráficos de validación
+
+- Nueva sección principal Gráficos.
+- Curvas mensuales referencia / inicial / calibrado para eficiencia y Tout.
+- Bandas visuales identifican meses usados para calibrar; el resto son hold-out.
+- Barras de error relativo absoluto antes/después sólo para hold-out.
+- Scatter predicción vs referencia con línea ideal y=x.
+- Residuos firmados para detectar sesgo.
+- Tabla exacta detrás de los gráficos y descarga CSV.
+- Botón Abrir gráficos desde la sección Validación.
+- Todos los plotly_chart nuevos usan keys únicas.

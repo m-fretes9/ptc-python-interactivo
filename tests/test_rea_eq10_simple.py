@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from defaults import default_fluid_database
-from validations import validate_rea_eq10_from_tout
+from rea_eq10_validation import validate_rea_eq10_from_tout
 
 
 def test_rea_eq10_simple_alvorada_diagnostic():
