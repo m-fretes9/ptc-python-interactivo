@@ -1,0 +1,8 @@
+V14.5.1 — Hotfix de importación de gráficos de auditoría
+
+- Los tres gráficos de la auditoría convección vs radiación fueron movidos a
+  `rea_loss_component_charts.py`.
+- `app.py` ya no depende de que `visualizations.py` contenga esas funciones.
+- Esto evita el ImportError observado cuando Streamlit/GitHub despliega una copia
+  anterior o cacheada de `visualizations.py`.
+- No cambia ninguna ecuación, correlación ni resultado físico de V14.5.

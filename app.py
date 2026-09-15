@@ -19,6 +19,11 @@ from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
 from rea_loss_component_audit import audit_rea_loss_components
+from rea_loss_component_charts import (
+    rea_loss_component_magnitude_figure,
+    rea_loss_component_factors_figure,
+    rea_loss_component_counterfactual_figure,
+)
 from validations import (
     analyze_bhambare_numerical_convergence,
     analyze_bhambare_physical_sensitivity,
@@ -54,9 +59,6 @@ from visualizations import (
     validation_holdout_error_figure,
     validation_prediction_scatter_figure,
     validation_signed_residual_figure,
-    rea_loss_component_magnitude_figure,
-    rea_loss_component_factors_figure,
-    rea_loss_component_counterfactual_figure,
 )
 
 
