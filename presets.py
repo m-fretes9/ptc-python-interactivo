@@ -140,7 +140,7 @@ def _apply_rea_geometry(cfg: dict[str, Any]) -> None:
 def _rea_assumptions(monthly: bool = False) -> list[str]:
     items = [
         "Reflectividad efectiva 0.85 e interceptación 0.95: no están tabuladas por Rea Quille; son hipótesis editables heredadas del modelo base.",
-        "Viento 1.0 m/s: la tabla de Rea Quille no publica este valor; es una hipótesis editable para nuestro balance de pérdidas.",
+        "Viento 1.0 m/s: la tabla de Rea Quille no publica este valor; se conserva únicamente como baseline del preset. En validación mensual el viento se trata como entrada meteorológica independiente y no como parámetro calibrable del colector.",
         "Temperatura de cielo: se implementan las Ecs. (12)-(14) de Rea Quille/Martin-Berdahl. Las tablas 8, 10 y 11 no publican Tdp, f_nuvem ni epsilon_nuvem; el preset usa Tdp=15 °C y cielo claro (sin corrección de nubosidad) como hipótesis explícita editable.",
         "Propiedades rho, Cp y k del cobre: valores de ingeniería del modelo; el TCC identifica tubo de cobre pero no tabula estas propiedades.",
         "D4/D5 se conservan solo por compatibilidad de estructura; has_glass=False y no participan del circuito físico del prototipo.",

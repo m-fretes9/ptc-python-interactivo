@@ -1374,7 +1374,13 @@ def inverse_parameter_options(
         cfg, _ = build_rea_prototype_preset()
     else:
         raise ValueError(f"Caso inverso desconocido: {case}")
-    return _inverse_parameter_registry(cfg, fluid_database)
+    registry = _inverse_parameter_registry(cfg, fluid_database)
+    # En las tablas mensuales de Rea el viento es una entrada meteorológica,
+    # no una propiedad del colector. Desde V14.7 queda fuera de la calibración
+    # mensual y se prueba de forma independiente con una serie climatológica.
+    if key in {"rea_foz", "rea_alvorada"}:
+        registry.pop("wind_m_s", None)
+    return registry
 
 
 def _apply_inverse_parameters(

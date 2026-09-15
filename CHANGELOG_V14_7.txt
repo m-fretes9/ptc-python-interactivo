@@ -1,0 +1,13 @@
+V14.7 — Hipótesis de viento meteorológico mensual
+
+- Se retira de la interfaz la auditoría de flujo externo V14.6.
+- Nueva prueba diagnóstica: viento fijo de 1 m/s vs viento mensual independiente.
+- Foz incluye template WeatherSpark / NASA MERRA-2 de velocidad media horaria a 10 m:
+  3.7, 3.6, 3.6, 3.9, 4.0, 4.1, 4.3, 4.4, 4.4, 4.3, 4.0, 3.8 mph.
+- Opción de consultar NASA POWER WS10M climatológico online para Foz o Alvorada.
+- Serie mensual siempre editable manualmente.
+- Opción de trasladar v10 a altura efectiva del receptor mediante ley de potencia
+  v(z)=v10*(z/10)^alpha, con z y alpha explícitos y editables.
+- La prueba compara RMSE, correlación, Tout y Qconv sin calibrar ninguna constante.
+- El viento se elimina de los parámetros calibrables de las validaciones mensuales Rea.
+- La prueba usa N=6 y BDF para acelerar el diagnóstico; no altera el modelo guardado.

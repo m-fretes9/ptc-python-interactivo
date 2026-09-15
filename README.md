@@ -278,3 +278,7 @@ La auditoría convección/radiación de V14.5 se retira de la interfaz una vez i
 - velocidad de viento implícita que produciría esa pérdida con la misma correlación y con el campo de temperaturas congelado.
 
 El viento implícito requerido es sólo un diagnóstico local; no se interpreta como medición meteorológica ni se aplica automáticamente al modelo. Esto permite distinguir si el exceso de convección proviene principalmente de la hipótesis `viento = 1 m/s`, de la dependencia de Churchill–Bernstein con Reynolds/temperatura de película o de un mecanismo que el viento por sí solo no puede explicar.
+
+## V14.7 — prueba de viento meteorológico mensual
+
+La validación Rea mensual incluye una prueba diagnóstica que mantiene congeladas las constantes del colector y cambia únicamente la entrada de viento. El baseline de 1 m/s se compara contra una serie mensual independiente a 10 m, con corrección opcional a la altura efectiva del receptor mediante una ley de potencia. El viento ya no se ofrece como parámetro de calibración en Rea mensual: se considera una entrada meteorológica.

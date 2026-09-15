@@ -18,12 +18,16 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
-from rea_external_flow_audit import audit_rea_external_flow
-from rea_external_flow_charts import (
-    external_h_figure,
-    external_wind_figure,
-    external_dimensionless_figure,
-    external_temperature_figure,
+from rea_meteorological_wind_test import (
+    foz_weatherspark_wind_10m,
+    fetch_nasa_power_ws10m_climatology,
+    run_monthly_wind_hypothesis,
+)
+from rea_meteorological_wind_charts import (
+    wind_input_figure,
+    wind_eta_figure,
+    wind_tout_figure,
+    wind_convection_figure,
 )
 from validations import (
     analyze_bhambare_numerical_convergence,
@@ -1316,141 +1320,189 @@ elif main_section == "Validación":
     )
 
     # ------------------------------------------------------------------
-    # Prueba diagnóstica 4: abrir la convección externa.
-    # La auditoría convección/radiación anterior fue retirada de la UI
-    # después de identificar la convección externa como bloque prioritario.
+    # Prueba diagnóstica 5: sustituir el viento fijo por meteorología
+    # independiente. La auditoría de flujo externo anterior se retira de
+    # la interfaz después de identificar al viento fijo de 1 m/s como
+    # hipótesis ambiental prioritaria a comprobar.
     # ------------------------------------------------------------------
-    st.markdown("#### Prueba diagnóstica · auditoría de flujo externo")
+    st.markdown("#### Prueba diagnóstica · viento meteorológico mensual")
     st.write(
-        "Esta prueba no calibra nada. Abre la correlación de convección externa usada por el modelo "
-        "(Churchill–Bernstein para cilindro en flujo cruzado) y muestra, mes a mes, la temperatura de película, "
-        "Reynolds, Nusselt, h externo y el h que sería necesario para cerrar el balance con Rea Quille."
+        "Esta prueba no calibra ninguna constante del colector. Mantiene exactamente el mismo modelo y cambia solamente "
+        "la entrada de viento: compara el supuesto fijo de 1 m/s contra una serie mensual independiente."
     )
-    st.latex(r"Re_D=\frac{\rho_{air}v_wD}{\mu_{air}},\qquad h=\frac{Nu_D k_{air}}{D}")
-    st.latex(r"Q_{conv}=h\,\pi D L\,(T_s-T_{amb})")
+    st.latex(r"v(z)=v_{10}\left(\frac{z}{10}\right)^{\alpha}")
     st.caption(
-        "Además se calcula un viento implícito requerido usando exactamente la misma correlación y congelando el campo de temperaturas. "
-        "Ese viento es un diagnóstico local: no se guarda ni se interpreta como dato meteorológico medido."
+        "Los datos climatológicos se expresan a 10 m. Si se activa la corrección de altura, la velocidad se traslada a una "
+        "altura efectiva del receptor mediante una ley de potencia. La altura y α son hipótesis explícitas del ensayo."
     )
 
-    latest_calibration = st.session_state.validations.get("model_validation")
-    compatible_latest = (
-        isinstance(latest_calibration, dict)
-        and latest_calibration.get("case") == validation_case
-        and isinstance(latest_calibration.get("parameter_table"), pd.DataFrame)
-        and not latest_calibration.get("parameter_table").empty
+    wind_source_options = ["Serie manual editable", "NASA POWER WS10M · climatología online"]
+    if validation_case == "rea_foz":
+        wind_source_options.insert(0, "WeatherSpark / NASA MERRA-2 · Foz · 10 m")
+
+    source_col, height_col, alpha_col = st.columns([1.55, 0.8, 0.8])
+    wind_source = source_col.selectbox(
+        "Fuente de viento mensual",
+        wind_source_options,
+        key=f"wind_hypothesis_source_{validation_case}",
     )
-    flow_cols = st.columns([1.25, 1.0])
-    flow_source_options = ["Parámetros nominales"]
-    if compatible_latest:
-        flow_source_options.append("Última calibración de esta ciudad")
-    flow_source = flow_cols[0].selectbox(
-        "Constantes usadas en la prueba",
-        flow_source_options,
-        key=f"rea_external_flow_source_{validation_case}",
-        help="La auditoría nunca optimiza. Puede inspeccionar el modelo nominal o aplicar una calibración ya existente.",
+    apply_height = source_col.checkbox(
+        "Ajustar viento de 10 m a altura del receptor",
+        value=True,
+        key=f"wind_height_adjust_{validation_case}",
     )
-    run_external_flow_audit = flow_cols[1].button(
-        "Ejecutar auditoría de flujo externo",
+    receiver_height = height_col.number_input(
+        "Altura efectiva (m)",
+        min_value=0.05,
+        max_value=10.0,
+        value=1.0,
+        step=0.1,
+        disabled=not apply_height,
+        key=f"wind_receiver_height_{validation_case}",
+    )
+    wind_alpha = alpha_col.number_input(
+        "Exponente α",
+        min_value=0.0,
+        max_value=0.6,
+        value=0.14,
+        step=0.01,
+        disabled=not apply_height,
+        key=f"wind_power_alpha_{validation_case}",
+    )
+
+    wind_state_key = f"wind_series_{validation_case}"
+    if wind_state_key not in st.session_state:
+        if validation_case == "rea_foz":
+            st.session_state[wind_state_key] = foz_weatherspark_wind_10m()
+        else:
+            st.session_state[wind_state_key] = pd.DataFrame({
+                "Mes": ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"],
+                "Viento_10m_m_s": [1.0] * 12,
+                "Fuente": ["Manual / pendiente"] * 12,
+            })
+
+    if wind_source.startswith("WeatherSpark") and validation_case == "rea_foz":
+        st.session_state[wind_state_key] = foz_weatherspark_wind_10m()
+    elif wind_source.startswith("NASA POWER"):
+        fetch_col, info_col = st.columns([0.8, 2.2])
+        if fetch_col.button(
+            "Cargar NASA POWER",
+            width="stretch",
+            key=f"fetch_nasa_power_wind_{validation_case}",
+        ):
+            try:
+                with st.spinner("Consultando WS10M climatológico en NASA POWER..."):
+                    st.session_state[wind_state_key] = fetch_nasa_power_ws10m_climatology(validation_case)
+                st.success("Serie NASA POWER cargada.")
+            except Exception as exc:
+                st.error(f"No fue posible consultar NASA POWER: {exc}")
+        info_col.caption(
+            "WS10M es velocidad media del viento a 10 m. Si el servidor no tiene acceso externo, edite la tabla manualmente."
+        )
+
+    wind_editor = st.data_editor(
+        st.session_state[wind_state_key],
         width="stretch",
-        key=f"run_rea_external_flow_audit_{validation_case}",
+        hide_index=True,
+        disabled=["Mes", "Fuente"],
+        key=f"wind_hypothesis_editor_{validation_case}",
     )
-    if run_external_flow_audit:
+    st.session_state[wind_state_key] = wind_editor
+
+    run_wind_test = st.button(
+        "Ejecutar prueba de viento meteorológico",
+        width="stretch",
+        key=f"run_wind_hypothesis_{validation_case}",
+    )
+    if run_wind_test:
         try:
-            city_for_audit = "Foz do Iguaçu" if validation_case == "rea_foz" else "Alvorada do Norte"
-            calibration_for_audit = latest_calibration if flow_source.startswith("Última") else None
-            with st.spinner("Ejecutando los 12 meses y abriendo Re/Nu/h externo..."):
-                st.session_state.validations["rea_external_flow_audit"] = audit_rea_external_flow(
-                    city_for_audit,
+            winds = pd.to_numeric(wind_editor["Viento_10m_m_s"], errors="raise").to_numpy(dtype=float)
+            with st.spinner("Ejecutando 12 meses con viento fijo y 12 meses con viento meteorológico..."):
+                st.session_state.validations["rea_wind_hypothesis"] = run_monthly_wind_hypothesis(
+                    validation_case,
                     fluid_db,
-                    calibration=calibration_for_audit,
+                    winds,
+                    apply_height_adjustment=apply_height,
+                    receiver_height_m=receiver_height,
+                    alpha=wind_alpha,
                 )
         except Exception as exc:
             st.exception(exc)
 
-    flow_audit = st.session_state.validations.get("rea_external_flow_audit")
-    if isinstance(flow_audit, dict) and flow_audit.get("case") == validation_case:
-        flow_table = flow_audit["table"]
-        flow_metrics = flow_audit["metrics"]
-        st.caption(f"Fuente de parámetros: {flow_audit.get('parameter_source', '—')}")
+    wind_test = st.session_state.validations.get("rea_wind_hypothesis")
+    if isinstance(wind_test, dict) and wind_test.get("case") == validation_case:
+        wt = wind_test["table"]
+        wm = wind_test["metrics"]
+        verdict = wind_test.get("verdict", "inconclusa")
 
-        fm = st.columns(6)
-        fm[0].metric("Viento asumido", f"{flow_metrics['current_wind_mean_m_s']:.2f} m/s")
-        fm[1].metric(
-            "Viento requerido · media",
-            f"{flow_metrics['required_wind_mean_m_s']:.2f} m/s" if np.isfinite(flow_metrics['required_wind_mean_m_s']) else "—",
+        metric_cols = st.columns(6)
+        metric_cols[0].metric("RMSE η · fijo", f"{wm['eta_base']['rmse']:.2f} pp")
+        metric_cols[1].metric(
+            "RMSE η · meteo",
+            f"{wm['eta_meteo']['rmse']:.2f} pp",
+            delta=f"{wm['eta_meteo']['rmse'] - wm['eta_base']['rmse']:+.2f} pp",
+            delta_color="inverse",
         )
-        fm[2].metric(
-            "Rango viento requerido",
-            (f"{flow_metrics['required_wind_min_m_s']:.2f}–{flow_metrics['required_wind_max_m_s']:.2f} m/s"
-             if np.isfinite(flow_metrics['required_wind_min_m_s']) else "—"),
+        metric_cols[2].metric("r η · fijo", f"{wm['eta_base']['corr']:.3f}")
+        metric_cols[3].metric(
+            "r η · meteo",
+            f"{wm['eta_meteo']['corr']:.3f}",
+            delta=f"{wm['eta_corr_delta']:+.3f}",
         )
-        fm[3].metric("h modelo · media", f"{flow_metrics['h_model_mean_W_m2K']:.2f} W/m²K")
-        fm[4].metric("h requerido · media", f"{flow_metrics['h_required_mean_W_m2K']:.2f} W/m²K")
-        fm[5].metric("Variación factor h", f"{flow_metrics['h_factor_cv_pct']:.1f} %")
+        metric_cols[4].metric("Viento usado · media", f"{wm['wind_used_mean_m_s']:.2f} m/s")
+        metric_cols[5].metric("ΔQconv · media", f"{wm['qconv_delta_mean_W']:+.1f} W")
 
-        fm2 = st.columns(5)
-        fm2[0].metric("Re externo · media", f"{flow_metrics['Re_model_mean']:.0f}")
-        fm2[1].metric("Nu externo · media", f"{flow_metrics['Nu_model_mean']:.2f}")
-        fm2[2].metric("Rango T película", f"{flow_metrics['film_temp_range_K']:.1f} K")
-        fm2[3].metric(
-            "CV viento requerido",
-            f"{flow_metrics['required_wind_cv_pct']:.1f} %" if np.isfinite(flow_metrics['required_wind_cv_pct']) else "—",
-        )
-        fm2[4].metric("Meses con solución de viento", f"{flow_metrics['wind_solution_months']}/{len(flow_table)}")
+        if verdict == "apoya":
+            st.success(wind_test["diagnosis"])
+        elif verdict == "rechaza":
+            st.warning(wind_test["diagnosis"])
+        else:
+            st.info(wind_test["diagnosis"])
 
-        for message in flow_audit.get("diagnosis", []):
-            if "no puede" in message or "no puede" in message.lower():
-                st.warning(message)
-            elif "merece" in message.lower() or "conviene" in message.lower():
-                st.info(message)
-            else:
-                st.success(message) if "estacional" in message.lower() else st.info(message)
-
-        flow_plot_cols = st.columns(2)
-        with flow_plot_cols[0]:
+        p1, p2 = st.columns(2)
+        with p1:
             st.plotly_chart(
-                external_h_figure(flow_table),
+                wind_input_figure(wt),
                 width="stretch",
-                key=f"rea_external_h_{validation_case}",
+                key=f"wind_hypothesis_input_{validation_case}",
             )
-        with flow_plot_cols[1]:
+        with p2:
             st.plotly_chart(
-                external_wind_figure(flow_table),
+                wind_eta_figure(wt),
                 width="stretch",
-                key=f"rea_external_wind_{validation_case}",
+                key=f"wind_hypothesis_eta_{validation_case}",
             )
-        flow_plot_cols_2 = st.columns(2)
-        with flow_plot_cols_2[0]:
+        p3, p4 = st.columns(2)
+        with p3:
             st.plotly_chart(
-                external_dimensionless_figure(flow_table),
+                wind_tout_figure(wt),
                 width="stretch",
-                key=f"rea_external_dimensionless_{validation_case}",
+                key=f"wind_hypothesis_tout_{validation_case}",
             )
-        with flow_plot_cols_2[1]:
+        with p4:
             st.plotly_chart(
-                external_temperature_figure(flow_table),
+                wind_convection_figure(wt),
                 width="stretch",
-                key=f"rea_external_temperature_{validation_case}",
+                key=f"wind_hypothesis_qconv_{validation_case}",
             )
 
-        with st.expander("Ver datos exactos de la auditoría de flujo externo", expanded=False):
-            st.dataframe(flow_table, width="stretch", hide_index=True)
+        with st.expander("Ver datos exactos de la prueba de viento", expanded=False):
+            st.dataframe(wt, width="stretch", hide_index=True)
             st.download_button(
-                "Descargar auditoría de flujo externo · CSV",
-                data=flow_table.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"auditoria_flujo_externo_{validation_case}.csv",
+                "Descargar prueba de viento · CSV",
+                data=wt.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"prueba_viento_meteorologico_{validation_case}.csv",
                 mime="text/csv",
                 width="stretch",
-                key=f"download_rea_external_flow_audit_{validation_case}",
+                key=f"download_wind_hypothesis_{validation_case}",
             )
-        st.caption(flow_audit.get("note", ""))
+        st.caption(wind_test.get("note", ""))
 
     st.divider()
 
     registry = inverse_parameter_options(validation_case, fluid_db)
     label_to_id = {spec["label"]: pid for pid, spec in registry.items()}
-    default_ids = ["eta_opt_eff", "wind_m_s"]
+    default_ids = ["eta_opt_eff"]
     default_labels = [registry[pid]["label"] for pid in default_ids if pid in registry]
     selected_labels = st.multiselect(
         "Parámetros a calibrar",
