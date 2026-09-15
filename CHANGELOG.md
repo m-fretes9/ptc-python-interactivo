@@ -386,3 +386,16 @@ V14.8 — Prueba diagnóstica de agregación temporal de irradiancia
 ### Limpieza del paquete V14.9
 
 Se retiraron del ZIP completo los módulos y tests de las pruebas diagnósticas ya descartadas (auditoría de pérdidas por componente, auditoría de flujo externo y agregación temporal). El historial y las conclusiones de esas etapas permanecen en este changelog consolidado.
+## V14.10 — Auditoría radial Bhambare/Sukhatme
+
+- Se cerró la comprobación de solver: la comparación externa MATLAB (ode45/ode15s/ode23t) y Python converge al mismo estado, por lo que el integrador deja de tratarse como hipótesis activa.
+- Se retiró de la interfaz la prueba diagnóstica de apantallamiento aerodinámico V14.9.
+- Nueva prueba única en Validación: **cierre radial Bhambare/Sukhatme**.
+- La prueba impone las temperaturas de vidrio publicadas y recalcula Qloss con exactamente el bloque externo actual (Churchill–Bernstein + radiación al cielo).
+- También calcula la Tglass que necesitaría el bloque externo para reproducir Qloss de Bhambare y Sukhatme.
+- Se audita el balance aproximado del vidrio con los pares publicados (Tabs, Tglass) y el intercambio radiativo absorbedor→vidrio.
+- No se calibra ningún parámetro: la prueba sirve para decidir si la discrepancia está en el bloque externo o aguas arriba del vidrio.
+- Resultado de control con el preset nominal: Tglass requerida ≈332.18 K para Qloss de Bhambare (publicada 331.40 K) y ≈333.66 K para Qloss de Sukhatme (publicada 333.39 K). Esto indica que el bloque externo puede reproducir las pérdidas publicadas si se alcanza la Tglass correspondiente.
+- El par Bhambare cierra el balance del vidrio dentro de ~3.3 %, mientras el par Sukhatme deja un residual aproximado de -29.5 % con las ecuaciones de Bhambare implementadas, señal de incompatibilidad estructural entre ambos benchmarks bajo el mismo circuito radial.
+- Se mantienen un único `CHANGELOG.md` y se eliminan del paquete los módulos de la hipótesis diagnóstica anterior.
+

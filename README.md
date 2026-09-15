@@ -298,3 +298,15 @@ La prueba de agregación temporal de V14.8 se retira de la interfaz después de 
 `S_v` se identifica solamente con enero, abril, julio y octubre de Foz do Iguaçu. Después queda congelado y se evalúa contra los ocho meses hold-out de Foz y contra los doce meses de Alvorada do Norte sin recalibración. El ensayo mantiene el viento ambiente baseline de 1 m/s para aislar el posible apantallamiento de la calha; por tanto no se presenta como reconstrucción meteorológica.
 
 Desde V14.9 todo el historial de versiones está concentrado en `CHANGELOG.md`. Los antiguos archivos `CHANGELOG_V*.txt` fueron eliminados del paquete.
+
+## V14.10 · Auditoría radial Bhambare/Sukhatme
+
+La prueba diagnóstica activa ya no modifica el viento ni el solver. Ejecuta el caso Bhambare nominal y comprueba:
+
+1. si el bloque externo `convección + radiación al cielo` puede reproducir los Qloss publicados cuando se impone la Tglass de la referencia;
+2. qué Tglass necesita ese mismo bloque para alcanzar Qloss de Bhambare y Sukhatme;
+3. si los pares publicados `(Tabs, Tglass)` cierran el balance radial del vidrio con las ecuaciones actuales;
+4. cómo se reparte aproximadamente la potencia en el absorbedor en régimen cuasiestacionario.
+
+La prueba **no calibra parámetros**. Su objetivo es localizar el siguiente bloque físico que debe revisarse.
+

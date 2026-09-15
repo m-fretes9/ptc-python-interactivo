@@ -18,12 +18,12 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
-from rea_aerodynamic_shielding_test import run_aerodynamic_shielding_hypothesis
-from rea_aerodynamic_shielding_charts import (
-    shielding_objective_figure,
-    shielding_foz_figure,
-    shielding_alvorada_figure,
-    shielding_rmse_summary_figure,
+from bhambare_radial_audit import run_bhambare_radial_audit
+from bhambare_radial_charts import (
+    external_loss_closure_figure,
+    glass_balance_figure,
+    glass_residual_figure,
+    absorber_partition_figure,
 )
 from validations import (
     analyze_bhambare_numerical_convergence,
@@ -1316,126 +1316,95 @@ elif main_section == "Validación":
     )
 
     # ------------------------------------------------------------------
-    # Prueba diagnóstica 7: apantallamiento aerodinámico del receptor.
-    # La agregación temporal se retira tras mostrar un efecto prácticamente nulo.
-    # Se calibra UN único S_v con 4 meses de Foz y se congela para Foz hold-out
-    # y Alvorada, evitando un factor diferente por mes o por ciudad.
+    # Prueba diagnóstica: cierre radial Bhambare/Sukhatme.
+    # La comparación de solvers MATLAB/Python ya descartó el integrador como
+    # causa principal. Esta etapa comprueba primero si el bloque externo de
+    # pérdidas es capaz de reproducir Qloss cuando se impone Tglass publicada.
     # ------------------------------------------------------------------
-    st.markdown("#### Prueba diagnóstica · apantallamiento aerodinámico del receptor")
+    st.markdown("#### Prueba diagnóstica · cierre radial Bhambare / Sukhatme")
     st.write(
-        "Esta prueba pregunta si la calha puede reducir de forma aproximadamente constante la velocidad efectiva que "
-        "alcanza el receiver. No se ajusta un viento por mes. Se identifica un único factor S_v usando sólo Ene/Abr/Jul/Oct "
-        "de Foz, se congela y se prueba primero en los ocho meses hold-out de Foz y después en los 12 meses de Alvorada."
+        "La comparación MATLAB/Python mostró que ode45, ode15s, ode23t y SciPy convergen prácticamente al mismo estado. "
+        "Por eso esta prueba deja de tocar el solver y abre el circuito térmico radial. Primero pregunta si nuestras ecuaciones "
+        "de convección externa + radiación al cielo reproducen las pérdidas publicadas cuando se impone la temperatura de vidrio "
+        "de Bhambare o Sukhatme. Después verifica si los pares publicados (Tabs, Tglass) cierran el balance del vidrio con las mismas ecuaciones."
     )
-    st.latex(r"v_{eff}=S_v\,v_{amb},\qquad 0<S_v\le1")
+    st.latex(r"Q_{loss,ext}=h_{ext}\pi D_5L(T_g-T_{amb})+\varepsilon_g\sigma\pi D_5L(T_g^4-T_{sky}^4)")
     st.caption(
-        "Ensayo controlado: v_amb permanece en el baseline de 1 m/s del preset Rea para aislar únicamente el posible efecto "
-        "geométrico/aerodinámico. La hipótesis sólo gana fuerza si el mismo S_v mejora datos que nunca entraron en el ajuste."
+        "Prueba controlada: no calibra emisividades, óptica, viento ni solver. Si Qloss cierra al imponer Tglass, el bloque externo no es el origen principal de la discrepancia y debemos buscar la causa aguas arriba del vidrio."
     )
 
-    shield_cols = st.columns([1.0, 1.0, 2.0])
-    sv_min = shield_cols[0].number_input(
-        "Límite inferior S_v", min_value=0.10, max_value=0.80, value=0.20, step=0.05,
-        key="shielding_sv_min_v149",
-    )
-    sv_max = shield_cols[1].number_input(
-        "Límite superior S_v", min_value=0.50, max_value=1.00, value=1.00, step=0.05,
-        key="shielding_sv_max_v149",
-    )
-    shield_cols[2].info(
-        "Calibración: Foz Ene/Abr/Jul/Oct. Comprobación independiente: Foz Feb/Mar/May/Jun/Ago/Sep/Nov/Dic y "
-        "Alvorada completa. Tout se reporta, pero el objetivo usa sólo η para no duplicar información de la Ec. (10)."
-    )
-
-    run_shielding = st.button(
-        "Ejecutar prueba de apantallamiento", type="primary", width="stretch", key="run_aerodynamic_shielding_v149"
-    )
-    if run_shielding:
+    if st.button(
+        "Ejecutar auditoría radial Bhambare/Sukhatme",
+        type="primary", width="stretch", key="run_bhambare_radial_audit_v1410",
+    ):
         try:
-            if float(sv_min) >= float(sv_max):
-                st.error("El límite inferior de S_v debe ser menor que el superior.")
-            else:
-                with st.spinner("Calibrando un único S_v en 4 meses de Foz y validándolo sin reajuste..."):
-                    st.session_state.validations["rea_aerodynamic_shielding"] = run_aerodynamic_shielding_hypothesis(
-                        fluid_db, sv_min=float(sv_min), sv_max=float(sv_max)
-                    )
+            with st.spinner("Ejecutando Bhambare nominal y auditando el cierre radial..."):
+                st.session_state.validations["bhambare_radial_audit"] = run_bhambare_radial_audit(fluid_db)
         except Exception as exc:
             st.exception(exc)
 
-    shielding_test = st.session_state.validations.get("rea_aerodynamic_shielding")
-    if isinstance(shielding_test, dict):
-        sm = shielding_test["metrics"]
-        sv_star = float(shielding_test["S_v_star"])
-        top = st.columns(6)
-        top[0].metric("S_v identificado", f"{sv_star:.3f}")
-        top[1].metric("v_eff equivalente", f"{shielding_test['V_eff_star_m_s']:.3f} m/s")
-        top[2].metric(
-            "RMSE Foz hold-out",
-            f"{sm['foz_holdout']['eta_shielded']['rmse']:.2f} pp",
-            delta=f"{sm['foz_holdout']['eta_shielded']['rmse'] - sm['foz_holdout']['eta_baseline']['rmse']:+.2f} pp",
-            delta_color="inverse",
-        )
-        top[3].metric(
-            "Mejora Foz hold-out", f"{sm['foz_holdout']['eta_rmse_improvement_pct']:+.1f} %"
-        )
-        top[4].metric(
-            "RMSE Alvorada",
-            f"{sm['alvorada_external']['eta_shielded']['rmse']:.2f} pp",
-            delta=f"{sm['alvorada_external']['eta_shielded']['rmse'] - sm['alvorada_external']['eta_baseline']['rmse']:+.2f} pp",
-            delta_color="inverse",
-        )
-        top[5].metric(
-            "Mejora Alvorada", f"{sm['alvorada_external']['eta_rmse_improvement_pct']:+.1f} %"
-        )
+    radial = st.session_state.validations.get("bhambare_radial_audit")
+    if isinstance(radial, dict):
+        metrics = radial["metrics"]
+        target = radial["target_table"]
+        scenarios = radial["scenario_table"]
+        bh = target.loc[target["Referencia"] == "Bhambare"].iloc[0]
+        su = target.loc[target["Referencia"] == "Sukhatme"].iloc[0]
+        bh_pair = scenarios.loc[scenarios["Escenario"] == "Bhambare"].iloc[0]
+        su_pair = scenarios.loc[scenarios["Escenario"] == "Sukhatme"].iloc[0]
 
-        verdict = shielding_test.get("verdict", "parcial")
-        if verdict == "apoya":
-            st.success(shielding_test["diagnosis"])
-        elif verdict == "parcial":
-            st.info(shielding_test["diagnosis"])
+        top = st.columns(6)
+        top[0].metric("Tglass Python", f"{metrics['Tglass_model_K']:.2f} K")
+        top[1].metric("ΔTglass vs Sukhatme", f"{metrics['Tglass_error_vs_sukhatme_K']:+.2f} K")
+        top[2].metric("Qloss Python", f"{metrics['Qloss_model_W']:.1f} W")
+        top[3].metric("Tg req. · Bhambare", f"{bh['Tglass_requerida_por_bloque_externo_K']:.2f} K", delta=f"{bh['Delta_Tglass_K']:+.2f} K")
+        top[4].metric("Tg req. · Sukhatme", f"{su['Tglass_requerida_por_bloque_externo_K']:.2f} K", delta=f"{su['Delta_Tglass_K']:+.2f} K")
+        top[5].metric("Residual vidrio · Sukhatme", f"{su_pair['Residual_glass_pct_Qout']:+.1f} %")
+
+        verdict = radial.get("verdict", "")
+        if verdict.startswith("externo_ok"):
+            st.success(radial["diagnosis"])
         else:
-            st.warning(shielding_test["diagnosis"])
-        if shielding_test.get("near_bound"):
-            st.warning(
-                "El óptimo quedó cerca de un límite de búsqueda. No debe interpretarse todavía como un parámetro físico identificado."
-            )
+            st.warning(radial["diagnosis"])
 
         c1, c2 = st.columns(2)
         with c1:
             st.plotly_chart(
-                shielding_objective_figure(shielding_test["objective_trace"], sv_star),
-                width="stretch", key="shielding_objective_v149",
+                external_loss_closure_figure(radial["loss_curve"], target, scenarios),
+                width="stretch", key="bh_radial_external_closure_v1410",
             )
         with c2:
             st.plotly_chart(
-                shielding_rmse_summary_figure(sm), width="stretch", key="shielding_rmse_summary_v149"
+                glass_balance_figure(scenarios), width="stretch", key="bh_radial_glass_balance_v1410"
             )
-
         c3, c4 = st.columns(2)
         with c3:
             st.plotly_chart(
-                shielding_foz_figure(shielding_test["table"]), width="stretch", key="shielding_foz_v149"
+                glass_residual_figure(scenarios), width="stretch", key="bh_radial_glass_residual_v1410"
             )
         with c4:
             st.plotly_chart(
-                shielding_alvorada_figure(shielding_test["table"]), width="stretch", key="shielding_alvorada_v149"
+                absorber_partition_figure(scenarios), width="stretch", key="bh_radial_abs_partition_v1410"
             )
 
-        with st.expander("Ver datos exactos de la prueba de apantallamiento", expanded=False):
-            st.dataframe(shielding_test["table"], width="stretch", hide_index=True)
+        with st.expander("Ver datos exactos de la auditoría radial", expanded=False):
+            st.markdown("**Temperatura de vidrio necesaria para reproducir las pérdidas publicadas**")
+            st.dataframe(target, width="stretch", hide_index=True)
+            st.markdown("**Balance radial con los pares de temperatura publicados**")
+            st.dataframe(scenarios, width="stretch", hide_index=True)
             st.download_button(
-                "Descargar resultados mensuales · CSV",
-                data=shielding_test["table"].to_csv(index=False).encode("utf-8-sig"),
-                file_name="prueba_apantallamiento_aerodinamico_rea.csv", mime="text/csv", width="stretch",
-                key="download_shielding_results_v149",
+                "Descargar auditoría radial · CSV",
+                data=scenarios.to_csv(index=False).encode("utf-8-sig"),
+                file_name="auditoria_radial_bhambare_sukhatme.csv",
+                mime="text/csv", width="stretch", key="download_bh_radial_v1410",
             )
             st.download_button(
-                "Descargar curva de calibración S_v · CSV",
-                data=shielding_test["objective_trace"].to_csv(index=False).encode("utf-8-sig"),
-                file_name="calibracion_Sv_foz.csv", mime="text/csv", width="stretch",
-                key="download_shielding_objective_v149",
+                "Descargar cierre de Qloss · CSV",
+                data=target.to_csv(index=False).encode("utf-8-sig"),
+                file_name="cierre_qloss_bhambare_sukhatme.csv",
+                mime="text/csv", width="stretch", key="download_bh_qloss_v1410",
             )
-        st.caption(shielding_test.get("note", ""))
+        st.caption(radial.get("note", ""))
 
     st.divider()
 
