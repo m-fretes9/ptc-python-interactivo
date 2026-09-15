@@ -1,0 +1,10 @@
+V14.5 — Auditoría de pérdidas por mecanismo
+
+- Retira de la interfaz la prueba global F_opt/F_loss de V14.4.
+- Añade diagnóstico mensual convección externa vs radiación al cielo.
+- Calcula k_conv y k_rad requeridos mes a mes manteniendo el otro mecanismo fijo.
+- Calcula el mejor multiplicador global LS para cada mecanismo por separado, sin aplicarlo al modelo.
+- Compara RMSE de eficiencia: modelo actual, corrección convectiva global y corrección radiativa global.
+- Muestra participación media de Qconv y Qrad, coeficientes de variación e imposibilidad física (factor < 0).
+- Añade tres gráficos: magnitud de pérdidas, factores requeridos y contrafactual de eficiencia.
+- No cambia ecuaciones, correlaciones ni parámetros del simulador.

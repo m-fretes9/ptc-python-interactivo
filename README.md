@@ -74,7 +74,7 @@ Desde VSCode también puede abrir **Run and Debug** y seleccionar **Ejecutar int
 
 ## 4. Flujo de uso
 
-La interfaz V14.4 se organiza en cinco secciones principales:
+La interfaz V14.5 se organiza en cinco secciones principales:
 
 1. **Simulación**: resultados, análisis nodo por nodo y reporte/exportación. El botón **Ejecutar simulación** permanece en el encabezado superior derecho. Si la potencia solar absorbida es constante, la app omite el dashboard transitorio y muestra directamente el estado representativo/perfiles axiales.
 2. **Propiedades**: diagnóstico de irradiación, temperatura efectiva del cielo, perfil horario editable y propiedades termofísicas del HTF.
@@ -256,3 +256,10 @@ La prueba puede ejecutarse con los parámetros nominales o con la última calibr
 La prueba simple de la Ec. (10) se retira de la interfaz después de confirmar que el KPI de eficiencia no era la causa principal de la discrepancia estacional. En su lugar, **Validación** incorpora una auditoría energética mensual que no optimiza parámetros: ejecuta cada mes con las entradas documentales de Rea Quille, separa potencia solar absorbida, potencia útil y pérdidas externas, y calcula dos factores contrafactuales `F_opt` y `F_loss`.
 
 La prueba está pensada para decidir qué bloque debe revisarse después: una corrección óptica global sólo es plausible si `F_opt` se mantiene aproximadamente constante entre meses; una corrección global de pérdidas sólo es plausible si `F_loss` es aproximadamente constante. Si alguno cruza 1 y cambia fuertemente con la estación, el problema es de dependencia funcional/ambiental y no de una única constante.
+
+
+## V14.5 · Auditoría de pérdidas por mecanismo
+
+La auditoría global `F_opt/F_loss` de V14.4 se retira de la interfaz y se reemplaza por una prueba más específica. Para cada mes de Rea Quille, la app mantiene fija la potencia solar absorbida y calcula cuánto tendría que cambiar **solamente la convección externa** (`k_conv`) o **solamente la radiación al cielo** (`k_rad`) para alcanzar la potencia útil de referencia.
+
+La prueba muestra la participación de cada mecanismo, la estabilidad mensual de los factores requeridos y un contrafactual con el mejor multiplicador global por mínimos cuadrados aplicado a cada mecanismo por separado. Estos multiplicadores son exclusivamente diagnósticos: no se guardan ni se aplican al simulador como parámetros calibrados.

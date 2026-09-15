@@ -1,0 +1,11 @@
+V14.4 — Auditoría mensual del balance energético
+
+- Se retira de la interfaz la prueba simple de la Ec. (10), porque ya confirmó que la definición del KPI no era la causa principal de la discrepancia estacional.
+- Se añade una nueva prueba diagnóstica sin optimización para Rea Quille (Foz/Alvorada).
+- La prueba ejecuta los 12 meses y descompone Qsolar absorbida, Qútil, convección externa, radiación al cielo, soportes y almacenamiento.
+- Se calculan dos factores contrafactuales: F_opt y F_loss.
+- F_opt pregunta cuánto debería escalarse la potencia solar absorbida si las pérdidas actuales fueran correctas.
+- F_loss pregunta cuánto deberían escalarse las pérdidas si la potencia solar absorbida actual fuera correcta.
+- Se muestran tres gráficos: potencias principales, desglose de pérdidas y factores requeridos mes a mes.
+- Se incluyen métricas de variación mensual, meses ópticamente insuficientes, cierre de balance y exportación CSV.
+- La prueba puede usar parámetros nominales o aplicar una calibración ya existente, pero nunca recalibra.

@@ -18,7 +18,7 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
-from rea_energy_audit import audit_rea_monthly_energy_balance
+from rea_loss_component_audit import audit_rea_loss_components
 from validations import (
     analyze_bhambare_numerical_convergence,
     analyze_bhambare_physical_sensitivity,
@@ -54,9 +54,9 @@ from visualizations import (
     validation_holdout_error_figure,
     validation_prediction_scatter_figure,
     validation_signed_residual_figure,
-    rea_energy_flow_audit_figure,
-    rea_loss_breakdown_audit_figure,
-    rea_required_factors_audit_figure,
+    rea_loss_component_magnitude_figure,
+    rea_loss_component_factors_figure,
+    rea_loss_component_counterfactual_figure,
 )
 
 
@@ -1313,22 +1313,21 @@ elif main_section == "Validación":
     )
 
     # ------------------------------------------------------------------
-    # Prueba diagnóstica 2: auditoría mensual del balance energético.
-    # La prueba anterior de la Ec. (10) fue descartada de la UI porque ya
-    # confirmó que el KPI no era el origen principal de la discrepancia.
+    # Prueba diagnóstica 3: separar pérdidas convectivas y radiativas.
+    # La auditoría global anterior fue retirada de la UI después de mostrar
+    # que las pérdidas externas merecían una inspección por componentes.
     # ------------------------------------------------------------------
-    st.markdown("#### Prueba diagnóstica · balance energético mensual")
+    st.markdown("#### Prueba diagnóstica · convección externa vs radiación al cielo")
     st.write(
-        "Esta prueba no calibra nada. Ejecuta cada mes con Tin, Tamb, DNI y caudal de Rea Quille y descompone "
-        "la potencia absorbida, la ganancia útil y las pérdidas por convección/radiación. Después calcula dos factores "
-        "contrafactuales para saber qué bloque merece la siguiente revisión."
+        "Esta prueba no calibra nada. Mantiene fija la potencia solar absorbida y separa las pérdidas externas del receptor. "
+        "Para cada mes pregunta cuánto tendría que cambiar solamente la convección o solamente la radiación al cielo para que "
+        "la potencia útil coincida con Rea Quille, dejando el otro mecanismo intacto."
     )
-    st.latex(r"F_{opt}=\frac{Q_{u,ref}+Q_{loss,modelo}}{Q_{solar,modelo}}")
-    st.latex(r"F_{loss}=\frac{Q_{solar,modelo}-Q_{u,ref}}{Q_{loss,modelo}}")
+    st.latex(r"k_{conv}=\frac{Q_{solar}-Q_{storage}-Q_{u,ref}-Q_{rad}-Q_{sup}}{Q_{conv}}")
+    st.latex(r"k_{rad}=\frac{Q_{solar}-Q_{storage}-Q_{u,ref}-Q_{conv}-Q_{sup}}{Q_{rad}}")
     st.caption(
-        "Fopt responde cuánto tendría que escalarse la potencia solar absorbida si las pérdidas actuales fueran correctas. "
-        "Floss responde cuánto tendrían que escalarse las pérdidas si la potencia solar absorbida actual fuera correcta. "
-        "No son parámetros físicos identificados: son indicadores de diagnóstico."
+        "Interpretación: k=1 significa que el componente ya tiene la magnitud requerida; 0<k<1 significa que ese mecanismo pierde demasiado; "
+        "k>1 significa que pierde demasiado poco; k<0 indica que eliminar por completo ese mecanismo no bastaría para cerrar la referencia."
     )
 
     latest_calibration = st.session_state.validations.get("model_validation")
@@ -1338,27 +1337,27 @@ elif main_section == "Validación":
         and isinstance(latest_calibration.get("parameter_table"), pd.DataFrame)
         and not latest_calibration.get("parameter_table").empty
     )
-    audit_cols = st.columns([1.25, 1.0])
-    audit_source_options = ["Parámetros nominales"]
+    loss_cols = st.columns([1.25, 1.0])
+    loss_source_options = ["Parámetros nominales"]
     if compatible_latest:
-        audit_source_options.append("Última calibración de esta ciudad")
-    audit_source = audit_cols[0].selectbox(
-        "Constantes usadas en la auditoría",
-        audit_source_options,
-        key=f"rea_energy_audit_source_{validation_case}",
-        help="La auditoría nunca optimiza. Puede inspeccionar el modelo nominal o aplicar una calibración ya existente.",
+        loss_source_options.append("Última calibración de esta ciudad")
+    loss_source = loss_cols[0].selectbox(
+        "Constantes usadas en la prueba",
+        loss_source_options,
+        key=f"rea_loss_component_source_{validation_case}",
+        help="La prueba nunca optimiza. Puede inspeccionar el modelo nominal o aplicar una calibración ya existente.",
     )
-    run_energy_audit = audit_cols[1].button(
-        "Ejecutar auditoría energética",
+    run_loss_component_audit = loss_cols[1].button(
+        "Ejecutar prueba de pérdidas",
         width="stretch",
-        key=f"run_rea_energy_audit_{validation_case}",
+        key=f"run_rea_loss_component_audit_{validation_case}",
     )
-    if run_energy_audit:
+    if run_loss_component_audit:
         try:
             city_for_audit = "Foz do Iguaçu" if validation_case == "rea_foz" else "Alvorada do Norte"
-            calibration_for_audit = latest_calibration if audit_source.startswith("Última") else None
-            with st.spinner("Ejecutando los 12 meses y auditando el balance energético..."):
-                st.session_state.validations["rea_energy_audit"] = audit_rea_monthly_energy_balance(
+            calibration_for_audit = latest_calibration if loss_source.startswith("Última") else None
+            with st.spinner("Ejecutando los 12 meses y separando convección/radiación..."):
+                st.session_state.validations["rea_loss_component_audit"] = audit_rea_loss_components(
                     city_for_audit,
                     fluid_db,
                     calibration=calibration_for_audit,
@@ -1366,72 +1365,81 @@ elif main_section == "Validación":
         except Exception as exc:
             st.exception(exc)
 
-    energy_audit = st.session_state.validations.get("rea_energy_audit")
-    if isinstance(energy_audit, dict) and energy_audit.get("case") == validation_case:
-        audit_table = energy_audit["table"]
-        audit_metrics = energy_audit["metrics"]
-        st.caption(f"Fuente de parámetros: {energy_audit.get('parameter_source', '—')}")
+    loss_audit = st.session_state.validations.get("rea_loss_component_audit")
+    if isinstance(loss_audit, dict) and loss_audit.get("case") == validation_case:
+        loss_table = loss_audit["table"]
+        loss_metrics = loss_audit["metrics"]
+        st.caption(f"Fuente de parámetros: {loss_audit.get('parameter_source', '—')}")
 
-        am = st.columns(6)
-        am[0].metric("RMSE η actual", f"{audit_metrics['eta_rmse_pp']:.2f} pp")
-        am[1].metric(
-            "F óptico medio",
-            f"{audit_metrics['opt_factor_mean']:.3f}",
-            help="1.0 significa que, en promedio, no haría falta escalar la potencia solar absorbida.",
+        lm = st.columns(6)
+        lm[0].metric("RMSE η actual", f"{loss_metrics['eta_rmse_base_pp']:.2f} pp")
+        lm[1].metric(
+            "k conv global",
+            f"{loss_metrics['kconv_global_ls']:.3f}",
+            help="Mejor multiplicador único de Qconv por mínimos cuadrados. Es diagnóstico, no se aplica al modelo.",
         )
-        am[2].metric(
-            "Variación F óptico",
-            f"{audit_metrics['opt_factor_cv_pct']:.1f} %",
-            help="Coeficiente de variación entre meses. Cuanto menor, más plausible es una única corrección óptica global.",
+        lm[2].metric(
+            "RMSE con k conv",
+            f"{loss_metrics['eta_rmse_kconv_global_pp']:.2f} pp",
         )
-        am[3].metric("F pérdidas medio", f"{audit_metrics['loss_factor_mean']:.3f}")
-        am[4].metric(
-            "Variación F pérdidas",
-            f"{audit_metrics['loss_factor_cv_pct']:.1f} %",
-            help="Si es grande, un único coeficiente global de pérdidas no puede corregir toda la forma estacional.",
+        lm[3].metric(
+            "k rad global",
+            f"{loss_metrics['krad_global_ls']:.3f}",
+            help="Mejor multiplicador único de Qrad por mínimos cuadrados. Es diagnóstico, no se aplica al modelo.",
         )
-        am[5].metric(
-            "Meses sin energía óptica suficiente",
-            f"{audit_metrics['months_optically_insufficient']}",
-            help="Meses en que ni siquiera Qloss=0 permitiría alcanzar el calor útil de referencia con la absorción solar actual.",
+        lm[4].metric(
+            "RMSE con k rad",
+            f"{loss_metrics['eta_rmse_krad_global_pp']:.2f} pp",
+        )
+        lm[5].metric(
+            "Prioridad sugerida",
+            str(loss_metrics.get("preferred_component", "—")),
         )
 
-        for message in energy_audit.get("diagnosis", []):
-            if "no puede" in message or "incorrecta" in message or "insuficiente" in message:
+        detail_cols = st.columns(4)
+        detail_cols[0].metric("Convección · fracción media", f"{loss_metrics['conv_share_mean_pct']:.1f} %")
+        detail_cols[1].metric("Variación k conv", f"{loss_metrics['conv_factor_cv_pct']:.1f} %")
+        detail_cols[2].metric("Radiación · fracción media", f"{loss_metrics['rad_share_mean_pct']:.1f} %")
+        detail_cols[3].metric("Variación k rad", f"{loss_metrics['rad_factor_cv_pct']:.1f} %")
+
+        for message in loss_audit.get("diagnosis", []):
+            if "no puede" in message or "negativo" in message:
                 st.warning(message)
+            elif "Prioridad" in message:
+                st.success(message)
             else:
                 st.info(message)
 
-        audit_plot_cols = st.columns(2)
-        with audit_plot_cols[0]:
+        loss_plot_cols = st.columns(2)
+        with loss_plot_cols[0]:
             st.plotly_chart(
-                rea_energy_flow_audit_figure(audit_table),
+                rea_loss_component_magnitude_figure(loss_table),
                 width="stretch",
-                key=f"rea_energy_flow_audit_{validation_case}",
+                key=f"rea_loss_component_magnitude_{validation_case}",
             )
-        with audit_plot_cols[1]:
+        with loss_plot_cols[1]:
             st.plotly_chart(
-                rea_loss_breakdown_audit_figure(audit_table),
+                rea_loss_component_factors_figure(loss_table),
                 width="stretch",
-                key=f"rea_loss_breakdown_audit_{validation_case}",
+                key=f"rea_loss_component_factors_{validation_case}",
             )
         st.plotly_chart(
-            rea_required_factors_audit_figure(audit_table),
+            rea_loss_component_counterfactual_figure(loss_table, loss_metrics),
             width="stretch",
-            key=f"rea_required_factors_audit_{validation_case}",
+            key=f"rea_loss_component_counterfactual_{validation_case}",
         )
 
-        with st.expander("Ver datos exactos de la auditoría energética", expanded=False):
-            st.dataframe(audit_table, width="stretch", hide_index=True)
+        with st.expander("Ver datos exactos de la prueba de pérdidas", expanded=False):
+            st.dataframe(loss_table, width="stretch", hide_index=True)
             st.download_button(
-                "Descargar auditoría energética · CSV",
-                data=audit_table.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"auditoria_energetica_{validation_case}.csv",
+                "Descargar auditoría convección/radiación · CSV",
+                data=loss_table.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"auditoria_perdidas_componentes_{validation_case}.csv",
                 mime="text/csv",
                 width="stretch",
-                key=f"download_rea_energy_audit_{validation_case}",
+                key=f"download_rea_loss_component_audit_{validation_case}",
             )
-        st.caption(energy_audit.get("note", ""))
+        st.caption(loss_audit.get("note", ""))
 
     st.divider()
 
