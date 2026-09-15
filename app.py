@@ -18,12 +18,12 @@ from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_s
 from fluid_properties import FluidPropertyEvaluator, property_curve
 from ptc_model import PTCSimulator, SimulationResult, effective_sky_temperature
 from technical_report import build_technical_report, result_summary
-from rea_temporal_aggregation_test import run_temporal_aggregation_hypothesis
-from rea_temporal_aggregation_charts import (
-    temporal_profile_figure,
-    temporal_eta_figure,
-    temporal_tout_figure,
-    temporal_jensen_gap_figure,
+from rea_aerodynamic_shielding_test import run_aerodynamic_shielding_hypothesis
+from rea_aerodynamic_shielding_charts import (
+    shielding_objective_figure,
+    shielding_foz_figure,
+    shielding_alvorada_figure,
+    shielding_rmse_summary_figure,
 )
 from validations import (
     analyze_bhambare_numerical_convergence,
@@ -1316,150 +1316,126 @@ elif main_section == "Validación":
     )
 
     # ------------------------------------------------------------------
-    # Prueba diagnóstica 6: sesgo por agregación temporal.
-    # La prueba de viento meteorológico se retira después de mostrar que
-    # cambiar únicamente v_w empeora el ajuste y no corrige la forma.
+    # Prueba diagnóstica 7: apantallamiento aerodinámico del receptor.
+    # La agregación temporal se retira tras mostrar un efecto prácticamente nulo.
+    # Se calibra UN único S_v con 4 meses de Foz y se congela para Foz hold-out
+    # y Alvorada, evitando un factor diferente por mes o por ciudad.
     # ------------------------------------------------------------------
-    st.markdown("#### Prueba diagnóstica · agregación temporal de irradiancia")
+    st.markdown("#### Prueba diagnóstica · apantallamiento aerodinámico del receptor")
     st.write(
-        "Esta prueba mantiene congelados Tin, Tamb, caudal, viento y todas las constantes del colector. "
-        "Compara el modelo mensual actual, evaluado una vez con el DNI medio de Rea, contra el promedio de varias "
-        "respuestas cuasiestacionarias a un perfil solar representativo que conserva exactamente el mismo DNI medio."
+        "Esta prueba pregunta si la calha puede reducir de forma aproximadamente constante la velocidad efectiva que "
+        "alcanza el receiver. No se ajusta un viento por mes. Se identifica un único factor S_v usando sólo Ene/Abr/Jul/Oct "
+        "de Foz, se congela y se prueba primero en los ocho meses hold-out de Foz y después en los 12 meses de Alvorada."
     )
-    st.latex(r"f(\overline{DNI})\;\;\stackrel{?}{=}\;\;\overline{f(DNI(t))}")
-    st.latex(
-        r"\eta_{temporal}=100\,\frac{\overline{\dot Q_u(DNI(t))}}{A_a\,\overline{DNI(t)}}"
-    )
+    st.latex(r"v_{eff}=S_v\,v_{amb},\qquad 0<S_v\le1")
     st.caption(
-        "No es una reconstrucción horaria completa del TRNSYS. Es una prueba controlada del efecto de no linealidad: "
-        "la energía solar media se conserva y solamente cambia su distribución durante un día solar representativo."
+        "Ensayo controlado: v_amb permanece en el baseline de 1 m/s del preset Rea para aislar únicamente el posible efecto "
+        "geométrico/aerodinámico. La hipótesis sólo gana fuerza si el mismo S_v mejora datos que nunca entraron en el ajuste."
     )
 
-    agg_cols = st.columns([1.0, 1.0, 2.0])
-    agg_bins = agg_cols[0].select_slider(
-        "Puntos del día",
-        options=[5, 7, 9, 11, 13],
-        value=7,
-        key=f"temporal_aggregation_bins_{validation_case}",
-        help="Cada punto se resuelve cuasiestacionariamente. Más puntos aumentan el costo computacional.",
+    shield_cols = st.columns([1.0, 1.0, 2.0])
+    sv_min = shield_cols[0].number_input(
+        "Límite inferior S_v", min_value=0.10, max_value=0.80, value=0.20, step=0.05,
+        key="shielding_sv_min_v149",
     )
-    agg_B = agg_cols[1].number_input(
-        "Forma atmosférica B",
-        min_value=0.00,
-        max_value=0.50,
-        value=0.15,
-        step=0.01,
-        key=f"temporal_aggregation_B_{validation_case}",
-        help="Controla únicamente la forma relativa del DNI durante el día. El perfil se reescala para conservar el DNI medio publicado.",
+    sv_max = shield_cols[1].number_input(
+        "Límite superior S_v", min_value=0.50, max_value=1.00, value=1.00, step=0.05,
+        key="shielding_sv_max_v149",
     )
-    agg_cols[2].info(
-        "Control del ensayo: incidencia normal (θ=0), misma óptica, mismo viento y misma meteorología mensual. "
-        "El perfil horario no introduce tracking ni cambia la energía solar media."
+    shield_cols[2].info(
+        "Calibración: Foz Ene/Abr/Jul/Oct. Comprobación independiente: Foz Feb/Mar/May/Jun/Ago/Sep/Nov/Dic y "
+        "Alvorada completa. Tout se reporta, pero el objetivo usa sólo η para no duplicar información de la Ec. (10)."
     )
 
-    run_aggregation_test = st.button(
-        "Ejecutar prueba de agregación temporal",
-        width="stretch",
-        key=f"run_temporal_aggregation_{validation_case}",
+    run_shielding = st.button(
+        "Ejecutar prueba de apantallamiento", type="primary", width="stretch", key="run_aerodynamic_shielding_v149"
     )
-    if run_aggregation_test:
+    if run_shielding:
         try:
-            with st.spinner(
-                f"Ejecutando 12 meses: DNI medio vs {int(agg_bins)} estados solares representativos por mes..."
-            ):
-                st.session_state.validations["rea_temporal_aggregation"] = run_temporal_aggregation_hypothesis(
-                    validation_case,
-                    fluid_db,
-                    n_bins=int(agg_bins),
-                    atmospheric_B=float(agg_B),
-                )
+            if float(sv_min) >= float(sv_max):
+                st.error("El límite inferior de S_v debe ser menor que el superior.")
+            else:
+                with st.spinner("Calibrando un único S_v en 4 meses de Foz y validándolo sin reajuste..."):
+                    st.session_state.validations["rea_aerodynamic_shielding"] = run_aerodynamic_shielding_hypothesis(
+                        fluid_db, sv_min=float(sv_min), sv_max=float(sv_max)
+                    )
         except Exception as exc:
             st.exception(exc)
 
-    aggregation_test = st.session_state.validations.get("rea_temporal_aggregation")
-    if isinstance(aggregation_test, dict) and aggregation_test.get("case") == validation_case:
-        at = aggregation_test["table"]
-        ap = aggregation_test["profiles"]
-        am = aggregation_test["metrics"]
-        verdict = aggregation_test.get("verdict", "inconclusa")
-
-        metric_cols = st.columns(6)
-        metric_cols[0].metric("RMSE η · DNI medio", f"{am['eta_mean_input']['rmse']:.2f} pp")
-        metric_cols[1].metric(
-            "RMSE η · temporal",
-            f"{am['eta_temporal']['rmse']:.2f} pp",
-            delta=f"{am['eta_temporal']['rmse'] - am['eta_mean_input']['rmse']:+.2f} pp",
+    shielding_test = st.session_state.validations.get("rea_aerodynamic_shielding")
+    if isinstance(shielding_test, dict):
+        sm = shielding_test["metrics"]
+        sv_star = float(shielding_test["S_v_star"])
+        top = st.columns(6)
+        top[0].metric("S_v identificado", f"{sv_star:.3f}")
+        top[1].metric("v_eff equivalente", f"{shielding_test['V_eff_star_m_s']:.3f} m/s")
+        top[2].metric(
+            "RMSE Foz hold-out",
+            f"{sm['foz_holdout']['eta_shielded']['rmse']:.2f} pp",
+            delta=f"{sm['foz_holdout']['eta_shielded']['rmse'] - sm['foz_holdout']['eta_baseline']['rmse']:+.2f} pp",
             delta_color="inverse",
         )
-        metric_cols[2].metric("r η · DNI medio", f"{am['eta_mean_input']['corr']:.3f}")
-        metric_cols[3].metric(
-            "r η · temporal",
-            f"{am['eta_temporal']['corr']:.3f}",
-            delta=f"{am['eta_corr_delta']:+.3f}",
+        top[3].metric(
+            "Mejora Foz hold-out", f"{sm['foz_holdout']['eta_rmse_improvement_pct']:+.1f} %"
         )
-        metric_cols[4].metric("|Δη| medio", f"{am['mean_abs_jensen_gap_pp']:.2f} pp")
-        metric_cols[5].metric("DNI pico máx.", f"{am['max_profile_dni_W_m2']:.0f} W/m²")
+        top[4].metric(
+            "RMSE Alvorada",
+            f"{sm['alvorada_external']['eta_shielded']['rmse']:.2f} pp",
+            delta=f"{sm['alvorada_external']['eta_shielded']['rmse'] - sm['alvorada_external']['eta_baseline']['rmse']:+.2f} pp",
+            delta_color="inverse",
+        )
+        top[5].metric(
+            "Mejora Alvorada", f"{sm['alvorada_external']['eta_rmse_improvement_pct']:+.1f} %"
+        )
 
+        verdict = shielding_test.get("verdict", "parcial")
         if verdict == "apoya":
-            st.success(aggregation_test["diagnosis"])
-        elif verdict == "rechaza":
-            st.warning(aggregation_test["diagnosis"])
+            st.success(shielding_test["diagnosis"])
+        elif verdict == "parcial":
+            st.info(shielding_test["diagnosis"])
         else:
-            st.info(aggregation_test["diagnosis"])
-
-        p1, p2 = st.columns(2)
-        with p1:
-            st.plotly_chart(
-                temporal_eta_figure(at),
-                width="stretch",
-                key=f"temporal_aggregation_eta_{validation_case}",
-            )
-        with p2:
-            selected_profile_month = st.selectbox(
-                "Mes mostrado en el perfil diario",
-                at["Mes"].astype(str).tolist(),
-                index=6 if len(at) > 6 else 0,
-                key=f"temporal_profile_month_{validation_case}",
-            )
-            st.plotly_chart(
-                temporal_profile_figure(ap, selected_profile_month),
-                width="stretch",
-                key=f"temporal_aggregation_profile_{validation_case}_{selected_profile_month}",
+            st.warning(shielding_test["diagnosis"])
+        if shielding_test.get("near_bound"):
+            st.warning(
+                "El óptimo quedó cerca de un límite de búsqueda. No debe interpretarse todavía como un parámetro físico identificado."
             )
 
-        p3, p4 = st.columns(2)
-        with p3:
+        c1, c2 = st.columns(2)
+        with c1:
             st.plotly_chart(
-                temporal_tout_figure(at),
-                width="stretch",
-                key=f"temporal_aggregation_tout_{validation_case}",
+                shielding_objective_figure(shielding_test["objective_trace"], sv_star),
+                width="stretch", key="shielding_objective_v149",
             )
-        with p4:
+        with c2:
             st.plotly_chart(
-                temporal_jensen_gap_figure(at),
-                width="stretch",
-                key=f"temporal_aggregation_gap_{validation_case}",
+                shielding_rmse_summary_figure(sm), width="stretch", key="shielding_rmse_summary_v149"
             )
 
-        with st.expander("Ver datos exactos de la prueba de agregación temporal", expanded=False):
-            st.dataframe(at, width="stretch", hide_index=True)
+        c3, c4 = st.columns(2)
+        with c3:
+            st.plotly_chart(
+                shielding_foz_figure(shielding_test["table"]), width="stretch", key="shielding_foz_v149"
+            )
+        with c4:
+            st.plotly_chart(
+                shielding_alvorada_figure(shielding_test["table"]), width="stretch", key="shielding_alvorada_v149"
+            )
+
+        with st.expander("Ver datos exactos de la prueba de apantallamiento", expanded=False):
+            st.dataframe(shielding_test["table"], width="stretch", hide_index=True)
             st.download_button(
-                "Descargar resumen mensual · CSV",
-                data=at.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"prueba_agregacion_temporal_{validation_case}.csv",
-                mime="text/csv",
-                width="stretch",
-                key=f"download_temporal_aggregation_{validation_case}",
+                "Descargar resultados mensuales · CSV",
+                data=shielding_test["table"].to_csv(index=False).encode("utf-8-sig"),
+                file_name="prueba_apantallamiento_aerodinamico_rea.csv", mime="text/csv", width="stretch",
+                key="download_shielding_results_v149",
             )
             st.download_button(
-                "Descargar perfiles temporales · CSV",
-                data=ap.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"perfiles_agregacion_temporal_{validation_case}.csv",
-                mime="text/csv",
-                width="stretch",
-                key=f"download_temporal_profiles_{validation_case}",
+                "Descargar curva de calibración S_v · CSV",
+                data=shielding_test["objective_trace"].to_csv(index=False).encode("utf-8-sig"),
+                file_name="calibracion_Sv_foz.csv", mime="text/csv", width="stretch",
+                key="download_shielding_objective_v149",
             )
-        st.caption(aggregation_test.get("note", ""))
+        st.caption(shielding_test.get("note", ""))
 
     st.divider()
 

@@ -290,3 +290,11 @@ La prueba de viento meteorológico de V14.7 se retira de la interfaz tras mostra
 Para cada mes se construye un día solar representativo en hora solar. El perfil relativo de DNI sigue una forma de cielo claro `exp(-B/cos(z))` y se reescala para que su media durante las horas solares sea exactamente igual al DNI mensual publicado. La app compara el caso histórico `f(DNI_medio)` contra el promedio de varios estados cuasiestacionarios `promedio[f(DNI(t))]`, calcula la eficiencia integrada por potencia útil media y muestra el gap de agregación mes a mes.
 
 La prueba no calibra parámetros y no pretende reconstruir el TRNSYS hora a hora. Su objetivo es comprobar de forma aislada si la no linealidad del PTC hace que trabajar directamente con promedios mensuales distorsione la curva de eficiencia.
+
+## V14.9 · Apantallamiento aerodinámico y changelog único
+
+La prueba de agregación temporal de V14.8 se retira de la interfaz después de mostrar un efecto despreciable sobre la curva mensual. La nueva prueba diagnóstica introduce un único factor estructural `S_v` mediante `v_eff = S_v · v_amb`.
+
+`S_v` se identifica solamente con enero, abril, julio y octubre de Foz do Iguaçu. Después queda congelado y se evalúa contra los ocho meses hold-out de Foz y contra los doce meses de Alvorada do Norte sin recalibración. El ensayo mantiene el viento ambiente baseline de 1 m/s para aislar el posible apantallamiento de la calha; por tanto no se presenta como reconstrucción meteorológica.
+
+Desde V14.9 todo el historial de versiones está concentrado en `CHANGELOG.md`. Los antiguos archivos `CHANGELOG_V*.txt` fueron eliminados del paquete.
