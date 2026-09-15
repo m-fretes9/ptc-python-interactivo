@@ -1831,3 +1831,85 @@ def validation_signed_residual_figure(comparison: pd.DataFrame, magnitude: str) 
         height=420,
     )
     return figure
+
+
+def rea_eq10_tout_diagnostic_figure(table: pd.DataFrame) -> go.Figure:
+    """Tout mensual: referencia documental vs salida directa del simulador."""
+    figure = go.Figure()
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        figure.update_layout(title="Sin datos para la prueba Eq. (10)")
+        return figure
+    x = table["Mes"].astype(str)
+    figure.add_trace(go.Scatter(
+        x=x,
+        y=table["Tout_ref_C"],
+        mode="lines+markers",
+        name="Tout referencia",
+        hovertemplate="%{x}<br>Referencia = %{y:.3f} °C<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=x,
+        y=table["Tout_Python_C"],
+        mode="lines+markers",
+        name="Tout Python",
+        customdata=table[["Err_Tout_pct"]].to_numpy(),
+        hovertemplate="%{x}<br>Python = %{y:.3f} °C<br>Error = %{customdata[0]:.3f}%<extra></extra>",
+    ))
+    figure.update_layout(
+        title="Prueba simple · Tout mensual",
+        xaxis_title="Mes",
+        yaxis_title="Temperatura de salida (°C)",
+        height=420,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+    )
+    return figure
+
+
+def rea_eq10_efficiency_diagnostic_figure(table: pd.DataFrame) -> go.Figure:
+    """Audita si la forma de η cambia al reconstruirla exclusivamente desde Tout mediante la Ec. (10)."""
+    figure = go.Figure()
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        figure.update_layout(title="Sin datos para la prueba Eq. (10)")
+        return figure
+    x = table["Mes"].astype(str)
+    figure.add_trace(go.Scatter(
+        x=x,
+        y=table["Eta_ref_publicada_pct"],
+        mode="lines+markers",
+        name="Referencia publicada",
+        hovertemplate="%{x}<br>η publicada = %{y:.3f}%<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=x,
+        y=table["Eta_ref_recalculada_Eq10_pct"],
+        mode="markers",
+        name="Referencia recalculada Eq. (10)",
+        marker={"symbol": "x", "size": 9},
+        hovertemplate="%{x}<br>η ref Eq.10 = %{y:.3f}%<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=x,
+        y=table["Eta_Python_Eq10_desde_Tout_pct"],
+        mode="lines+markers",
+        name="Python · Eq. (10) desde Tout",
+        customdata=table[["Err_Eta_Eq10_pct"]].to_numpy(),
+        hovertemplate="%{x}<br>η Python Eq.10 = %{y:.3f}%<br>Error = %{customdata[0]:.3f}%<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=x,
+        y=table["Eta_Python_interna_pct"],
+        mode="lines",
+        name="η interna del modelo",
+        line={"dash": "dot"},
+        hovertemplate="%{x}<br>η interna = %{y:.3f}%<extra></extra>",
+    ))
+    figure.update_layout(
+        title="Prueba simple · ¿la Ec. (10) cambia la forma de la eficiencia?",
+        xaxis_title="Mes",
+        yaxis_title="Eficiencia (%)",
+        height=460,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+    )
+    return figure

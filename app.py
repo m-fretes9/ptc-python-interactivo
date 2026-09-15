@@ -35,6 +35,7 @@ from validations import (
     validate_active_preset,
     validate_bhambare,
     validate_rea_quille_city_monthly,
+    validate_rea_eq10_from_tout,
     validate_tcc_monthly,
 )
 from visualizations import (
@@ -53,6 +54,8 @@ from visualizations import (
     validation_holdout_error_figure,
     validation_prediction_scatter_figure,
     validation_signed_residual_figure,
+    rea_eq10_tout_diagnostic_figure,
+    rea_eq10_efficiency_diagnostic_figure,
 )
 
 
@@ -1307,6 +1310,111 @@ elif main_section == "Validación":
         "Calibración: enero, abril, julio y octubre. Validación fuera de muestra: los ocho meses restantes. "
         "Los meses de hold-out nunca entran en la función objetivo del optimizador."
     )
+
+    # ------------------------------------------------------------------
+    # Prueba simple solicitada: reconstruir eta exclusivamente desde Tout
+    # con la Ec. (10) de Rea Quille, sin volver a calibrar parámetros.
+    # ------------------------------------------------------------------
+    st.markdown("#### Prueba simple · Ec. (10) reconstruida desde Tout")
+    st.write(
+        "Esta prueba no optimiza nada. Usa Tin, Tamb, DNI y caudal de cada mes exactamente como aparecen en Rea Quille, "
+        "ejecuta el modelo y toma únicamente **Tout**. Después recalcula la eficiencia como "
+        "η = ṁ·Cp·(Tout−Tin)/(Aa·DNI). Así podemos comprobar si la forma incorrecta de la curva venía de la definición del KPI."
+    )
+    latest_calibration = st.session_state.validations.get("model_validation")
+    compatible_latest = (
+        isinstance(latest_calibration, dict)
+        and latest_calibration.get("case") == validation_case
+        and isinstance(latest_calibration.get("parameter_table"), pd.DataFrame)
+        and not latest_calibration.get("parameter_table").empty
+    )
+    simple_cols = st.columns([1.25, 1.0])
+    source_options = ["Parámetros nominales"]
+    if compatible_latest:
+        source_options.append("Última calibración de esta ciudad")
+    simple_source = simple_cols[0].selectbox(
+        "Constantes usadas en esta prueba",
+        source_options,
+        key=f"rea_eq10_simple_source_{validation_case}",
+        help="La prueba nunca vuelve a optimizar. Si usa la última calibración, sólo aplica esos valores ya identificados.",
+    )
+    run_simple_eq10 = simple_cols[1].button(
+        "Ejecutar prueba Eq. (10)",
+        width="stretch",
+        key=f"run_rea_eq10_simple_{validation_case}",
+    )
+    if run_simple_eq10:
+        try:
+            city_for_simple = "Foz do Iguaçu" if validation_case == "rea_foz" else "Alvorada do Norte"
+            calibration_for_simple = latest_calibration if simple_source.startswith("Última") else None
+            with st.spinner("Ejecutando los 12 meses y reconstruyendo η exclusivamente desde Tout..."):
+                st.session_state.validations["rea_eq10_simple_test"] = validate_rea_eq10_from_tout(
+                    city_for_simple,
+                    fluid_db,
+                    calibration=calibration_for_simple,
+                )
+        except Exception as exc:
+            st.exception(exc)
+
+    simple_test = st.session_state.validations.get("rea_eq10_simple_test")
+    if isinstance(simple_test, dict) and simple_test.get("case") == validation_case:
+        simple_table = simple_test["table"]
+        simple_metrics = simple_test["metrics"]
+        st.caption(f"Fuente de parámetros: {simple_test.get('parameter_source', '—')}")
+        diagnostic_metrics = st.columns(4)
+        diagnostic_metrics[0].metric("RMSE η · Eq.10", f"{simple_metrics['eta_rmse_pp']:.2f} pp")
+        diagnostic_metrics[1].metric("RMSE Tout", f"{simple_metrics['tout_rmse_C']:.3f} °C")
+        diagnostic_metrics[2].metric(
+            "Tabla Rea vs Eq.10",
+            f"{simple_metrics['max_reference_eq10_mismatch_pp']:.3f} pp",
+            help="Máxima diferencia entre η publicada y η recalculada usando Tout de la propia tabla.",
+        )
+        diagnostic_metrics[3].metric(
+            "η interna vs Eq.10",
+            f"{simple_metrics['max_python_native_eq10_mismatch_pp']:.4f} pp",
+            help="Si es casi cero, cambiar la definición del KPI no cambia la curva Python en este preset mensual.",
+        )
+
+        if simple_metrics["max_reference_eq10_mismatch_pp"] < 0.5:
+            st.success(
+                "La eficiencia publicada es internamente consistente con la Ec. (10): las diferencias al reconstruirla desde Tin/Tout/DNI son pequeñas."
+            )
+        if simple_metrics["max_python_native_eq10_mismatch_pp"] < 0.05:
+            st.warning(
+                "Diagnóstico: la eficiencia interna del modelo y la eficiencia reconstruida por Ec. (10) prácticamente coinciden. "
+                "Si las dos curvas se superponen abajo, la definición del KPI **no** es la causa de la forma estacional incorrecta; el siguiente paso será revisar entradas/estructura física."
+            )
+        else:
+            st.info(
+                "La reconstrucción por Ec. (10) sí modifica de forma apreciable la eficiencia respecto del KPI interno. Compare las curvas para cuantificar cuánto explica."
+            )
+
+        eq10_plot_cols = st.columns(2)
+        with eq10_plot_cols[0]:
+            st.plotly_chart(
+                rea_eq10_tout_diagnostic_figure(simple_table),
+                width="stretch",
+                key=f"rea_eq10_tout_plot_{validation_case}",
+            )
+        with eq10_plot_cols[1]:
+            st.plotly_chart(
+                rea_eq10_efficiency_diagnostic_figure(simple_table),
+                width="stretch",
+                key=f"rea_eq10_eta_plot_{validation_case}",
+            )
+        with st.expander("Ver datos exactos de la prueba Eq. (10)", expanded=False):
+            st.dataframe(simple_table, width="stretch", hide_index=True)
+            st.download_button(
+                "Descargar prueba Eq. (10) · CSV",
+                data=simple_table.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"prueba_eq10_{validation_case}.csv",
+                mime="text/csv",
+                width="stretch",
+                key=f"download_rea_eq10_simple_{validation_case}",
+            )
+        st.caption(simple_test.get("note", ""))
+
+    st.divider()
 
     registry = inverse_parameter_options(validation_case, fluid_db)
     label_to_id = {spec["label"]: pid for pid, spec in registry.items()}

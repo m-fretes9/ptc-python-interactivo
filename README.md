@@ -74,12 +74,13 @@ Desde VSCode también puede abrir **Run and Debug** y seleccionar **Ejecutar int
 
 ## 4. Flujo de uso
 
-La interfaz V14 se organiza en cuatro secciones principales:
+La interfaz V14.3 se organiza en cinco secciones principales:
 
 1. **Simulación**: resultados, análisis nodo por nodo y reporte/exportación. El botón **Ejecutar simulación** permanece en el encabezado superior derecho. Si la potencia solar absorbida es constante, la app omite el dashboard transitorio y muestra directamente el estado representativo/perfiles axiales.
 2. **Propiedades**: diagnóstico de irradiación, temperatura efectiva del cielo, perfil horario editable y propiedades termofísicas del HTF.
 3. **Validación**: calibración con enero/abril/julio/octubre y validación fuera de muestra con los ocho meses restantes. Los parámetros calibrados pueden aplicarse al simulador sin recalibrar contra el hold-out.
-4. **Sensibilidad**: convergencia numérica y perturbación física local de parámetros. Esta sección mide qué parámetros cambian más las salidas; no realiza calibración.
+4. **Gráficos**: auditoría visual de la última calibración/validación hold-out.
+5. **Sensibilidad**: convergencia numérica y perturbación física local de parámetros. Esta sección mide qué parámetros cambian más las salidas; no realiza calibración.
 
 Los benchmarks Bhambare/Sukhatme y Rea/Fiamonzini se mantienen como diagnósticos documentales secundarios dentro de Validación, diferenciados de la validación predictiva fuera de muestra.
 
@@ -241,3 +242,10 @@ Se corrigieron IDs duplicados de gráficos Plotly y APIs deprecadas de Streamlit
 
 ## V14.2 · Gráficos de validación
 La navegación principal incluye ahora **Gráficos**, una vista de auditoría visual de la última validación hold-out: comparativas mensuales, errores antes/después, predicción vs referencia, residuos y datos descargables.
+
+
+## V14.3 · Prueba simple Eq. (10) desde Tout
+
+La sección **Validación** incorpora una prueba diagnóstica que no optimiza parámetros. Para cada mes de Rea Quille toma exactamente `Tin`, `Tamb`, `DNI` y `mdot` publicados, ejecuta el simulador, toma únicamente `Tout` y reconstruye posteriormente la eficiencia con `eta = mdot*Cp*(Tout-Tin)/(Aa*DNI)`. La interfaz grafica `Tout` y eficiencia, recalcula la eficiencia de la propia tabla para comprobar consistencia documental y compara la eficiencia Eq. (10) con el KPI interno del modelo.
+
+La prueba puede ejecutarse con los parámetros nominales o con la última calibración ya guardada de esa misma ciudad, pero nunca vuelve a calibrar. Su objetivo es distinguir un error de definición de KPI de un error de entradas o estructura física.
