@@ -744,6 +744,42 @@ def validation_tcc_figure(table: pd.DataFrame) -> go.Figure:
 
 
 
+
+
+def validation_rea_foz_figure(table: pd.DataFrame) -> go.Figure:
+    """Comparación mensual Foz (Rea Quille) vs modelo con Hausen: Tout y eficiencia."""
+    figure = make_subplots(
+        rows=2,
+        cols=1,
+        subplot_titles=("Temperatura de salida mensual · Foz do Iguaçu", "Eficiencia térmica mensual · Foz do Iguaçu"),
+        vertical_spacing=0.16,
+    )
+    x = table["Mes"]
+    figure.add_trace(go.Scatter(x=x, y=table["Tout_ref_C"], mode="lines+markers", name="Tout referencia"), row=1, col=1)
+    figure.add_trace(go.Scatter(x=x, y=table["Tout_Python_C"], mode="lines+markers", name="Tout modelo"), row=1, col=1)
+    figure.add_trace(go.Scatter(x=x, y=table["Eta_ref_pct"], mode="lines+markers", name="η referencia"), row=2, col=1)
+    figure.add_trace(go.Scatter(x=x, y=table["Eta_Python_pct"], mode="lines+markers", name="η modelo"), row=2, col=1)
+    figure.update_yaxes(title_text="Tout (°C)", row=1, col=1)
+    figure.update_yaxes(title_text="η (%)", row=2, col=1)
+    figure.update_xaxes(title_text="Mes", row=2, col=1)
+    figure.update_layout(height=780, title="Validación mensual Rea Quille · Foz · correlación de Hausen", hovermode="x unified")
+    return figure
+
+
+def validation_rea_foz_error_figure(table: pd.DataFrame) -> go.Figure:
+    """Errores mensuales de la validación Foz con Hausen."""
+    figure = go.Figure()
+    figure.add_trace(go.Bar(x=table["Mes"], y=table["Err_Tout_pct"], name="Error Tout (%)"))
+    figure.add_trace(go.Bar(x=table["Mes"], y=table["Err_Eta_pct"], name="Error η (%)"))
+    figure.update_layout(
+        height=430,
+        title="Errores mensuales · Foz · correlación de Hausen",
+        xaxis_title="Mes",
+        yaxis_title="Error relativo (%)",
+        barmode="group",
+    )
+    return figure
+
 def bhambare_solver_comparison_figure(results: Mapping[str, SimulationResult]) -> go.Figure:
     """Superpone las trayectorias RK45/Radau/BDF del caso Bhambare/Sukhatme."""
     figure = make_subplots(

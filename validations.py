@@ -366,6 +366,82 @@ def validate_tcc_monthly(
     return validate_rea_quille_city_monthly("Foz do Iguaçu", fluid_database)
 
 
+
+
+def validate_rea_quille_foz_hausen(
+    fluid_database: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Validación mensual de Foz usando Hausen para flujo laminar no desarrollado."""
+    base = validate_rea_quille_city_monthly("Foz do Iguaçu", fluid_database)
+    data = REA_FOZ_MONTHLY
+    n = 12
+    Tout_sim_C = np.full(n, np.nan)
+    Quseful_sim_W = np.full(n, np.nan)
+    Qloss_sim_W = np.full(n, np.nan)
+    eta_sim_pct = np.full(n, np.nan)
+    Quseful_ref_W = np.full(n, np.nan)
+    water = FluidPropertyEvaluator("Agua", fluid_database)
+
+    for i in range(n):
+        cfg, _ = build_rea_monthly_preset("Foz do Iguaçu", i + 1)
+        cfg["model"]["internal_correlation"] = "hausen_laminar"
+        result = PTCSimulator(cfg, fluid_database).simulate()
+        k = len(result.t_s) - 1
+        Tout_sim_C[i] = result.Tout_C[k]
+        Quseful_sim_W[i] = result.scalar_diag["Quseful_W"][k]
+        Qloss_sim_W[i] = result.scalar_diag["Qloss_W"][k]
+        eta_sim_pct[i] = result.scalar_diag["eta_pct"][k]
+        prop_ref = water(0.5 * (data["Tin_C"][i] + data["Tout_ref_C"][i]) + 273.15)
+        Quseful_ref_W[i] = (
+            data["mdot_kg_s"][i]
+            * prop_ref.Cp
+            * (data["Tout_ref_C"][i] - data["Tin_C"][i])
+        )
+
+    Tout_ref_C = np.asarray(data["Tout_ref_C"], dtype=float)
+    eta_ref_pct = np.asarray(data["eta_ref_pct"], dtype=float)
+    err_Tout_pct = 100.0 * np.abs(Tout_sim_C - Tout_ref_C) / np.maximum(np.abs(Tout_ref_C), np.finfo(float).eps)
+    err_Quseful_pct = 100.0 * np.abs(Quseful_sim_W - Quseful_ref_W) / np.maximum(np.abs(Quseful_ref_W), np.finfo(float).eps)
+    err_eta_pct = 100.0 * np.abs(eta_sim_pct - eta_ref_pct) / np.maximum(np.abs(eta_ref_pct), np.finfo(float).eps)
+
+    table = pd.DataFrame(
+        {
+            "Mes": MONTH_ABBR_ES,
+            "Tin_C": np.asarray(data["Tin_C"], dtype=float),
+            "Tout_ref_C": Tout_ref_C,
+            "Tout_Python_C": Tout_sim_C,
+            "Err_Tout_pct": err_Tout_pct,
+            "Tamb_C": np.asarray(data["Tamb_C"], dtype=float),
+            "DNI_ref_W_m2": np.asarray(data["DNI_W_m2"], dtype=float),
+            "mdot_ref_kg_s": np.asarray(data["mdot_kg_s"], dtype=float),
+            "Qutil_ref_derivado_W": Quseful_ref_W,
+            "Qutil_Python_W": Quseful_sim_W,
+            "Qloss_Python_W": Qloss_sim_W,
+            "Eta_ref_pct": eta_ref_pct,
+            "Eta_Python_pct": eta_sim_pct,
+            "Diferencia_eta_pp": eta_sim_pct - eta_ref_pct,
+            "Err_Qutil_pct": err_Quseful_pct,
+            "Err_Eta_pct": err_eta_pct,
+        }
+    )
+    metrics = {
+        "RMSE_Tout_C": float(np.sqrt(np.mean((Tout_sim_C - Tout_ref_C) ** 2))),
+        "MAPE_Tout_pct": float(np.mean(err_Tout_pct)),
+        "RMSE_eta_pp": float(np.sqrt(np.mean((eta_sim_pct - eta_ref_pct) ** 2))),
+        "MAPE_eta_pct": float(np.mean(err_eta_pct)),
+        "Bias_eta_pp": float(np.mean(eta_sim_pct - eta_ref_pct)),
+    }
+    return {
+        "table": table,
+        "metrics": metrics,
+        "city": "Foz do Iguaçu",
+        "correlation": "Hausen · entrada laminar",
+        "note": (
+            "Se usa exclusivamente Foz do Iguaçu y se fuerza la correlación de Hausen para flujo laminar no desarrollado en todos los meses. "
+            "La comparación se centra en Tout y eficiencia mensual, porque Alvorada presenta discrepancias mayores y no es el foco de esta validación gráfica."
+        ),
+    }
+
 def prototype_tcc_table() -> dict[str, Any]:
     hours = np.asarray(REA_PROTOTYPE_HOURS["hours"], dtype=int)
     eta_exp = np.asarray(REA_PROTOTYPE_HOURS["eta_exp_pct"], dtype=float)
