@@ -1,5 +1,10 @@
 # PTC nodal en Python
 
+## V14.14 · Convección interna principal
+
+El modo por defecto es `automatica_hausen`. En flujo laminar, el programa calcula la longitud de entrada térmica `Lth = 0.05 Re Pr D` y aplica Hausen espacialmente por cada volumen de control. El Nusselt efectivo del volumen se obtiene a partir del valor medio acumulado de Hausen en sus caras; los volúmenes completamente aguas abajo de `Lth` usan `Nu = 4.36`. Entre Re=2300 y Re=4000 se realiza una transición suave hacia Gnielinski y, por encima de Re=4000, se usa Gnielinski. El modo `automatica` permanece disponible como comportamiento legado.
+
+
 Aplicación interactiva para simular un colector solar cilindro-parabólico con discretización axial y red térmica radial. Incluye:
 
 - balance transitorio de HTF, absorbedor y cubierta de vidrio en cada nodo;
@@ -128,7 +133,7 @@ El modelo dinámico se integra con `solve_ivp` y permite seleccionar `RK45`, `Ra
 
 ## Revisión de régimen para agua
 
-La versión actual evita una conmutación abrupta de Nusselt en Re=2300. En modo automático se usa Nu=4.36 en laminar, Gnielinski-Forristall en turbulento y una transición smoothstep continua entre los Reynolds configurables (2300 y 4000 por defecto). Esto elimina picos artificiales de h, temperatura y eficiencia cuando la viscosidad del agua hace cruzar el umbral durante el día.
+La versión actual evita una conmutación abrupta de Nusselt en Re=2300. El modo principal `automatica_hausen` representa explícitamente la entrada térmica laminar mediante Hausen por volumen de control, recupera Nu=4.36 para volúmenes térmicamente desarrollados y usa una transición smoothstep hacia Gnielinski-Forristall entre los Reynolds configurables (2300 y 4000 por defecto). El modo `automatica` legado conserva el comportamiento anterior para reproducibilidad.
 
 La interfaz muestra además η térmica del HTF, η óptica al absorbedor y η integrada del período. Una η térmica instantánea cercana a 60 % puede ser físicamente válida cuando el producto óptico ronda 65 % y las pérdidas son pequeñas.
 

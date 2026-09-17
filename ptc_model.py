@@ -126,6 +126,9 @@ class PTCSimulator:
         re_turb = float(model.get("Re_turbulent_min", 4000.0))
         if re_lam <= 0.0 or re_turb <= re_lam:
             raise ValueError("Debe cumplirse 0 < Re_laminar_max < Re_turbulent_min.")
+        entrance_factor = float(model.get("thermal_entrance_factor", 0.05))
+        if entrance_factor <= 0.0:
+            raise ValueError("thermal_entrance_factor debe ser positivo.")
 
     def simulate(self) -> SimulationResult:
         operation = self.cfg["operation"]
@@ -211,6 +214,9 @@ class PTCSimulator:
             "h_internal_W_m2K",
             "transition_weight",
             "Graetz_internal",
+            "thermal_entrance_length_m",
+            "x_over_Lth_internal",
+            "x_center_internal_m",
             "h_external_W_m2K",
             "rho_kg_m3",
             "mu_Pa_s",
@@ -294,6 +300,9 @@ class PTCSimulator:
                 "h_internal_W_m2K",
                 "transition_weight",
                 "Graetz_internal",
+                "thermal_entrance_length_m",
+                "x_over_Lth_internal",
+                "x_center_internal_m",
                 "h_external_W_m2K",
                 "rho_kg_m3",
                 "mu_Pa_s",
@@ -334,6 +343,9 @@ class PTCSimulator:
                 float(cfg["model"].get("Re_laminar_max", 2300.0)),
                 float(cfg["model"].get("Re_turbulent_min", 4000.0)),
                 characteristic_length_m=float(g["L"]),
+                x_start_m=float(i * self.dx),
+                x_end_m=float((i + 1) * self.dx),
+                thermal_entrance_factor=float(cfg["model"].get("thermal_entrance_factor", 0.05)),
             )
 
             Aint = np.pi * float(g["D2"]) * self.dx
@@ -485,6 +497,9 @@ class PTCSimulator:
             arrays["h_internal_W_m2K"][i] = conv_int["h_W_m2K"]
             arrays["transition_weight"][i] = conv_int["transition_weight"]
             arrays["Graetz_internal"][i] = conv_int["Graetz"]
+            arrays["thermal_entrance_length_m"][i] = conv_int["thermal_entrance_length_m"]
+            arrays["x_over_Lth_internal"][i] = conv_int["x_over_Lth"]
+            arrays["x_center_internal_m"][i] = conv_int["x_center_m"]
             arrays["rho_kg_m3"][i] = prop.rho
             arrays["mu_Pa_s"][i] = prop.mu
             arrays["Cp_J_kgK"][i] = prop.Cp
@@ -752,17 +767,24 @@ def internal_convection(
     re_laminar_max: float = 2300.0,
     re_turbulent_min: float = 4000.0,
     characteristic_length_m: float | None = None,
+    x_start_m: float | None = None,
+    x_end_m: float | None = None,
+    thermal_entrance_factor: float = 0.05,
 ) -> dict[str, Any]:
-    """Coeficiente convectivo interno con transición continua de régimen.
+    """Coeficiente convectivo interno con desarrollo térmico axial explícito.
 
-    El modelo anterior conmutaba de Nu=4.36 a Gnielinski exactamente en
-    Re=2300. Esa discontinuidad en Nu y h producía picos artificiales cuando
-    la viscosidad dependiente de T hacía cruzar el umbral durante el día.
+    El modo ``automatica_hausen`` usa Hausen en la región laminar de entrada
+    y recupera Nu=4.36 una vez superada la longitud térmica de entrada
+    L_th = C_th Re Pr D. En una discretización por volúmenes finitos no se
+    evalúa Hausen simplemente en el centro del nodo: se interpreta su Nu
+    como valor medio acumulado desde la entrada y se obtiene un Nu efectivo
+    para cada volumen a partir de la diferencia entre las integrales
+    acumuladas en sus caras.
 
-    En modo automático/Gnielinski se usa Nu=4.36 hasta re_laminar_max,
-    Gnielinski a partir de re_turbulent_min y una mezcla smoothstep entre
-    ambos en la zona de transición. Dittus-Boelter forzado conserva su
-    comportamiento explícito para estudios de sensibilidad.
+    Entre Re_laminar_max y Re_turbulent_min se mezcla suavemente la rama
+    laminar axial con Gnielinski. Para Re >= Re_turbulent_min se usa
+    Gnielinski. El modo ``automatica`` se conserva como legado (Nu=4.36 en
+    laminar) para reproducibilidad de archivos antiguos.
     """
     Re = 4.0 * mdot / (np.pi * diameter_m * prop.mu)
     Pr = prop.Pr
@@ -793,12 +815,44 @@ def internal_convection(
 
     length_m = max(float(characteristic_length_m or diameter_m), diameter_m)
     graetz = max(Re * Pr * diameter_m / length_m, 0.0)
+    entrance_factor = max(float(thermal_entrance_factor), np.finfo(float).eps)
+    thermal_entrance_length = max(entrance_factor * Re * Pr * diameter_m, 0.0)
 
-    def _hausen_heat_flux_nu() -> float:
-        # Correlación media de entrada laminar. Se conserva Nu=4.36 como
-        # límite plenamente desarrollado para flujo circular con q'' uniforme.
-        correction = 0.0668 * graetz / (1.0 + 0.04 * max(graetz, 0.0) ** (2.0 / 3.0))
+    def _hausen_mean_nu(distance_m: float) -> float:
+        """Nu medio acumulado desde la entrada hasta ``distance_m``."""
+        x = max(float(distance_m), np.finfo(float).eps)
+        gz_x = max(Re * Pr * diameter_m / x, 0.0)
+        correction = 0.0668 * gz_x / (1.0 + 0.04 * gz_x ** (2.0 / 3.0))
         return max(4.36 + correction, 4.36)
+
+    def _hausen_cumulative_nu_length(distance_m: float) -> float:
+        """Integral acumulada de Nu dx usada para obtener Nu por volumen.
+
+        Hasta L_th se usa el Nu medio de Hausen. Aguas abajo se prolonga la
+        integral con Nu=4.36, de modo que un volumen completamente ubicado
+        después de L_th queda exactamente en régimen térmicamente desarrollado.
+        """
+        x = max(float(distance_m), 0.0)
+        if x <= 0.0:
+            return 0.0
+        if thermal_entrance_length <= np.finfo(float).eps:
+            return 4.36 * x
+        x_dev = min(x, thermal_entrance_length)
+        cumulative = x_dev * _hausen_mean_nu(x_dev)
+        if x > thermal_entrance_length:
+            cumulative += 4.36 * (x - thermal_entrance_length)
+        return float(cumulative)
+
+    def _hausen_segment_nu() -> float:
+        """Nu efectivo del volumen [x_start, x_end] por balance acumulado."""
+        if x_start_m is None or x_end_m is None:
+            # Compatibilidad con auditorías antiguas que trataban todo el tubo
+            # mediante un Nu medio global evaluado con la longitud característica.
+            return _hausen_mean_nu(length_m)
+        x0 = max(float(x_start_m), 0.0)
+        x1 = max(float(x_end_m), x0 + np.finfo(float).eps)
+        integral = _hausen_cumulative_nu_length(x1) - _hausen_cumulative_nu_length(x0)
+        return max(float(integral / (x1 - x0)), 4.36)
 
     def _sieder_tate_laminar_nu() -> float:
         # Correlación media de entrada térmica/hidrodinámica. El factor de
@@ -813,9 +867,9 @@ def internal_convection(
         weight = 0.0
         correlation = "Laminar plenamente desarrollado Nu=4.36"
     elif normalized_mode == "hausen_laminar":
-        Nu = _hausen_heat_flux_nu()
+        Nu = _hausen_mean_nu(length_m)
         weight = 0.0
-        correlation = "Hausen laminar en desarrollo (q'' uniforme)"
+        correlation = "Hausen laminar medio global (q'' uniforme)"
     elif normalized_mode == "sieder_tate_laminar":
         Nu = _sieder_tate_laminar_nu()
         weight = 0.0
@@ -824,6 +878,25 @@ def internal_convection(
         Nu = _dittus_boelter_nu(Re)
         weight = 1.0
         correlation = "Dittus-Boelter forzado"
+    elif normalized_mode in {"automatica_hausen", "hausen_local"}:
+        Nu_lam = _hausen_segment_nu()
+        if Re <= re_lam:
+            Nu = Nu_lam
+            weight = 0.0
+            x_mid = 0.5 * (float(x_start_m or 0.0) + float(x_end_m or length_m))
+            correlation = (
+                "Hausen local · entrada térmica"
+                if x_mid < thermal_entrance_length
+                else "Laminar térmicamente desarrollado · Nu=4.36"
+            )
+        else:
+            weight = _smoothstep_weight(Re)
+            Nu_turb = _gnielinski_nu(Re)
+            Nu = (1.0 - weight) * Nu_lam + weight * Nu_turb
+            correlation = (
+                "Transición suave Hausen-Gnielinski"
+                if Re < re_turb else "Gnielinski-Forristall"
+            )
     elif Re <= re_lam:
         Nu = 4.36
         weight = 0.0
@@ -853,6 +926,12 @@ def internal_convection(
         "h_W_m2K": float(Nu * prop.k / diameter_m),
         "transition_weight": float(weight),
         "Graetz": float(graetz),
+        "thermal_entrance_length_m": float(thermal_entrance_length),
+        "x_center_m": float(0.5 * ((x_start_m or 0.0) + (x_end_m or length_m))),
+        "x_over_Lth": float(
+            0.5 * ((x_start_m or 0.0) + (x_end_m or length_m))
+            / max(thermal_entrance_length, np.finfo(float).eps)
+        ),
         "correlation": correlation,
     }
 

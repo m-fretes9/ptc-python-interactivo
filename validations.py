@@ -384,7 +384,7 @@ def validate_rea_quille_foz_hausen(
 
     for i in range(n):
         cfg, _ = build_rea_monthly_preset("Foz do Iguaçu", i + 1)
-        cfg["model"]["internal_correlation"] = "hausen_laminar"
+        cfg["model"]["internal_correlation"] = "automatica_hausen"
         result = PTCSimulator(cfg, fluid_database).simulate()
         k = len(result.t_s) - 1
         Tout_sim_C[i] = result.Tout_C[k]
@@ -435,9 +435,9 @@ def validate_rea_quille_foz_hausen(
         "table": table,
         "metrics": metrics,
         "city": "Foz do Iguaçu",
-        "correlation": "Hausen · entrada laminar",
+        "correlation": "Hausen local por volumen → Nu=4.36 desarrollado → Gnielinski",
         "note": (
-            "Se usa exclusivamente Foz do Iguaçu y se fuerza la correlación de Hausen para flujo laminar no desarrollado en todos los meses. "
+            "Se usa exclusivamente Foz do Iguaçu con la correlación interna principal: Hausen local por volumen durante la entrada térmica, Nu=4.36 una vez desarrollado y Gnielinski al alcanzar régimen turbulento. "
             "La comparación se centra en Tout y eficiencia mensual, porque Alvorada presenta discrepancias mayores y no es el foco de esta validación gráfica."
         ),
     }
@@ -803,6 +803,12 @@ def validate_rea_prototype_mode(
     applied_template = None
     if use_identified:
         applied_template = apply_identified_parameter_template(cfg, "rea_prototype")
+        # El CSV/XLSX identificado del 14/09/2026 fue generado antes de V14.14
+        # con la rama automática legado (Nu=4.36 en laminar). Se congela aquí
+        # esa correlación únicamente para reproducir el benchmark histórico;
+        # la simulación principal continúa usando automatica_hausen.
+        if str(target_key).strip().lower() == "csv_identified":
+            cfg["model"]["internal_correlation"] = "automatica"
 
     result = PTCSimulator(cfg, fluid_database).simulate()
     hours = np.asarray(REA_PROTOTYPE_HOURS["hours"], dtype=float)

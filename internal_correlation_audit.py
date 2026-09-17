@@ -37,7 +37,7 @@ from ptc_model import PTCSimulator
 
 
 CORRELATIONS: dict[str, str] = {
-    "laminar_436_forzado": "Actual automático · Nu=4.36",
+    "laminar_436_forzado": "Legado desarrollado · Nu=4.36",
     "hausen_laminar": "Hausen · entrada laminar",
     "sieder_tate_laminar": "Sieder–Tate · entrada laminar",
     "dittusboelter_forzado": "Dittus–Boelter forzado · control",

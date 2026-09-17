@@ -104,9 +104,10 @@ def _apply_rea_geometry(cfg: dict[str, Any]) -> None:
         {
             "has_glass": False,
             "annulus": "vacio_ideal",
-            "internal_correlation": "automatica",
+            "internal_correlation": "automatica_hausen",
             "Re_laminar_max": 2300.0,
             "Re_turbulent_min": 4000.0,
+            "thermal_entrance_factor": 0.05,
             "include_supports": False,
         }
     )

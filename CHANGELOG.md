@@ -1,5 +1,14 @@
 # CHANGELOG consolidado
 
+## V14.14
+
+- La simulación principal adopta `automatica_hausen`: Hausen para entrada térmica laminar, Nu=4.36 una vez desarrollado y Gnielinski para turbulento.
+- Hausen se aplica espacialmente por volumen finito. El Nu efectivo de cada volumen se obtiene de la diferencia del Nu medio acumulado entre sus caras, evitando evaluar toda la longitud con un único Nu.
+- Criterio explícito de longitud térmica de entrada: `Lth = 0.05 Re Pr D`, editable en opciones avanzadas.
+- Se agregan diagnósticos nodales `thermal_entrance_length_m`, `x_over_Lth_internal` y `x_center_internal_m`.
+- Se conserva `automatica` como modo legado para reproducibilidad.
+- La validación mensual de Foz usa ahora exactamente la correlación principal de Hausen local.
+
 Historial único del proyecto PTC Python Interactivo. Los antiguos `CHANGELOG_V*.txt` fueron integrados aquí en V14.9 para reducir archivos redundantes dentro del ZIP.
 
 

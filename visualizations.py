@@ -762,7 +762,7 @@ def validation_rea_foz_figure(table: pd.DataFrame) -> go.Figure:
     figure.update_yaxes(title_text="Tout (°C)", row=1, col=1)
     figure.update_yaxes(title_text="η (%)", row=2, col=1)
     figure.update_xaxes(title_text="Mes", row=2, col=1)
-    figure.update_layout(height=780, title="Validación mensual Rea Quille · Foz · correlación de Hausen", hovermode="x unified")
+    figure.update_layout(height=780, title="Validación mensual Rea Quille · Foz · Hausen local por volumen", hovermode="x unified")
     return figure
 
 
@@ -773,7 +773,7 @@ def validation_rea_foz_error_figure(table: pd.DataFrame) -> go.Figure:
     figure.add_trace(go.Bar(x=table["Mes"], y=table["Err_Eta_pct"], name="Error η (%)"))
     figure.update_layout(
         height=430,
-        title="Errores mensuales · Foz · correlación de Hausen",
+        title="Errores mensuales · Foz · Hausen local por volumen",
         xaxis_title="Mes",
         yaxis_title="Error relativo (%)",
         barmode="group",

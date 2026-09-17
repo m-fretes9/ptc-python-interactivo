@@ -774,11 +774,32 @@ with st.sidebar:
             model["annulus_h_effective_W_m2K"] = st.number_input(
                 "h anular efectivo (W/m² K)", min_value=0.0, value=float(model["annulus_h_effective_W_m2K"]), step=0.01
             )
-        correlation_options = ["automatica", "dittusboelter", "dittusboelter_forzado", "gnielinski"]
+        correlation_options = [
+            "automatica_hausen",
+            "automatica",
+            "hausen_local",
+            "laminar_436_forzado",
+            "dittusboelter",
+            "dittusboelter_forzado",
+            "gnielinski",
+        ]
+        correlation_labels = {
+            "automatica_hausen": "Automática · Hausen local → Nu=4.36 → Gnielinski",
+            "automatica": "Automática legado · Nu=4.36 → Gnielinski",
+            "hausen_local": "Hausen local por volumen · desarrollo térmico",
+            "laminar_436_forzado": "Laminar desarrollado forzado · Nu=4.36",
+            "dittusboelter": "Dittus–Boelter con transición",
+            "dittusboelter_forzado": "Dittus–Boelter forzado",
+            "gnielinski": "Gnielinski con transición",
+        }
+        current_correlation = model.get("internal_correlation", "automatica_hausen")
+        if current_correlation not in correlation_options:
+            current_correlation = "automatica_hausen"
         model["internal_correlation"] = st.selectbox(
             "Correlación interna",
             correlation_options,
-            index=correlation_options.index(model["internal_correlation"]),
+            index=correlation_options.index(current_correlation),
+            format_func=lambda value: correlation_labels[value],
         )
         if model["internal_correlation"] != "dittusboelter_forzado":
             re_cols = st.columns(2)
@@ -794,10 +815,24 @@ with st.sidebar:
                 value=max(float(model.get("Re_turbulent_min", 4000.0)), float(model["Re_laminar_max"]) + 1.0),
                 step=100.0,
             )
-            st.caption(
-                "Entre ambos Reynolds se interpola suavemente Nu para evitar saltos no físicos "
-                "al cruzar de laminar a transición/turbulento."
-            )
+            if model["internal_correlation"] in {"automatica_hausen", "hausen_local"}:
+                model["thermal_entrance_factor"] = st.number_input(
+                    "Factor de longitud de entrada térmica · Lth = C·Re·Pr·D",
+                    min_value=0.001,
+                    max_value=0.20,
+                    value=float(model.get("thermal_entrance_factor", 0.05)),
+                    step=0.005,
+                    format="%.3f",
+                )
+                st.caption(
+                    "Hausen se evalúa por volumen a partir de sus caras axiales. Al superar Lth, "
+                    "la rama laminar usa exactamente Nu=4.36; en transición se mezcla suavemente con Gnielinski."
+                )
+            else:
+                st.caption(
+                    "Entre ambos Reynolds se interpola suavemente Nu para evitar saltos no físicos "
+                    "al cruzar de laminar a transición/turbulento."
+                )
         model["include_supports"] = st.checkbox("Incluir pérdidas en soportes", value=bool(model["include_supports"]))
         if model["include_supports"]:
             model["support_loss_fraction"] = st.number_input(
