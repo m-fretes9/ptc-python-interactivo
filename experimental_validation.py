@@ -8,8 +8,10 @@ La irradiancia es una PREDICCIÓN de cielo claro; no es una medición.
 from __future__ import annotations
 
 from copy import deepcopy
+import base64
 from datetime import datetime, date, time
 from io import BytesIO
+import zlib
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -19,6 +21,68 @@ import pandas as pd
 from ptc_model import PTCSimulator
 
 BUNDLED_FOZ_CSV = Path(__file__).resolve().parent / "data" / "foz_2026_11_16_termopares.csv"
+
+# Copia autónoma de los cuatro campos autorizados del ensayo de 16/11/2026.
+# Streamlit Cloud puede desplegar módulos Python sin incluir el directorio data/.
+# Se usa ÚNICAMENTE cuando falta el CSV distribuido con el proyecto.
+# Generado desde data/foz_2026_11_16_termopares.csv (zlib + base85).
+# No contiene valores del sensor de radiación ni otras variables de la planilla.
+_EMBEDDED_FOZ_CSV_B85 = (
+    "c-nQFvCd_;4TSpud6OU4k|<Krc7fv}MLPFJij+YDBkzxBhCI8@B`;tsu<(ZwMNyPS_v~N)^6M{Ozy9s-zkL1opTGa>-"
+    "~ai?@4xlme*W>7@!QXT{!_P~djDy(VPCy{YxCROU$ec$zI46hBtXA)0ye(XUb+eZ3jNhCFkfdRz^Kq)vwf+&<|zPISQi*CZ3$RZxc_T@X@Bie0"
+    "8o&ZH2|7{O@+y6w%2I|FbQCY@#=Y+ClvHfbHADvz*Ug_Ivttp3BZ3BkURR9=xg-?fWjSO0q7}Fy;EVn_5`3(0IuLe%ruKWsGzU*NnwP-BBnC|5"
+    "(-`L=UD|X3D^bfCOiQ%6xIYVv;bUT4=UssG!zaMrWODc?A58DIR@4wfQ3I-D*#s*1a^*Lg@W8^u2<^?;0me$Mjm2^f-"
+    "L~WEOsdDj=Ji3u~?HB{Z8`~W#7Ff@4hCGOK!AK*atv61>jXZ?E~O7d3Qv|2FwLBdMJ#8Ei7r8V}!!po3{zrDgd8_Sv}1mF^hAcvt|K!4AP;{cL"
+    "HX_pp8SE0&oRmGtAq6Xeby{y-xwS!g7VQn!`fjD1hDzAUezhFtUQz<Uu_^VHLn6(5WCf4?7fQ2e7mNT){dPs|fOhf+-J$RRFHA7J!ieX>sB-VL"
+    "eCz_?guYfZWWbheGENdHYL$PQAf%CrwjEC=4D<S^=TJJmf|y5(?r9y#QR{o;a9AS__$>uz0lfQ2?%R97ts^&)I#r^~?&uPu}i89^yH>rE&9~0&"
+    "oT7VcfDwz<N%9`w+tlg?s8<;ADjz3PxZ{0l30F_3A{OxIeT5VC({z1nyq}q?(*96vhOQd-ZIgFqQX^6y)ro;1`u#a<hkmafp*vbB<8JH0Q+%z{"
+    "T55l-"
+    "^JiAfd1nKpO=Rv!FumQFA`CFalNpF^fYWt>)Bc7MnmT0G|ccViwCiy(Wd{#RaqgT;blt>RGI~%b~;EYf>wKP+*Yx^q<dtvfs6^YMRe|5~tq1B;"
+    "+BU`y?`1T`=Yeg?a1Yp5Un_wLN#*1t1^p+8%|Qhh4N{?SF`27hO(!C@cYxdz6k)Kt-M6!l@$^wgAXSvq~tOL0}ZX<SL*?-"
+    "Genx(`!=Mqb{%uz!ii;<nux`6p)8|a_s_e1!D~Px~LWk0jvTD1)pYWq`LlJK?}eYa2(uOq^+kr6t=?S<l{iSCJm?m1#*{DuSr9}Kw%evD;S4(Z"
+    ">0TOYoV|X02u`Ug?nY?V!fB#1$ro)#UVxkcnq6XZe@k>#IRuo-|v$ITtPei=1hP*c`!KE_e(E<P?!Kl24*NAQF22~fZnS$^3X4E7hMZL2?&Ar-"
+    "QD4uUExM@fwK$173P6+x2&+Ja65xhK?=YXkV#8kufsJDdiHxP>Z#UZQvu>kR8}~Q0SyqZ2XhpF$8h%rUJp``G%0Lf2g{uchMf?_*17d|TJHPbA"
+    "mH0yPXTxg%6-w&YF^juvp_al>JJ3ePi@v@-WS(34+5ie7N-DQLAZHyqONOpg&X9Zg;)W&0&ashU8!KY*QCaYlb5?|tfuk2=y@&dQ78`-"
+    "0<O^fK*>R_P{1wdq>B~-^)uJIeNNPlwGj5G)(gNDR;x~&4%Zwt>7BM0fY*aJQcVh@#oiq3QF|AFD-"
+    "6~{Pk9(U6z<`Uf>{L+HOV(IO=~emDBQCfk7iZ?>f4`NxTj1GiJgTYM^TeQLO}`S#TxV3n~T6H09P<7<Tf}o6gJ=Gb}xX~-"
+    "JQKUPt#&|3tMsS55q#is33WW6$;mYTtHg^{83@$#oCVoo7g!8;0mjw4HmOFp>PNcEdXtP?z535Kv<JFln;SZ0Ipzs$j!&1^iV)E$DObMl(lp?M"
+    "DDc0n#3whoH%V4fI1)ma#f3j0;Xx{4TOLzw2f!jnO0Ngqj30;YXuN7ECQ)uM4wqS3~^ckxWXi`vx0>Jj^<UgAhA$5pA=Y=H_2TXLj`E_QX!BNw"
+    "L?Mppq(p9b|~OBxQi|)Clu5G*en27Sj=R;iA}Fb#X}8%T>whJhnQ)I*+XFw$lZQ=O&TvbJ9)hh*E|T|U|m&^BNUVm`}tU$5(;Qy_gHKN;0pM8V"
+    "yCCz4%h4o%9<Rr078L@%1vx)D4<X7;$}WI6gG#*_lIeZf^aQb0l30Z)<XuoCV98l>Vh%7CLbW*Y3B}wE*}bJhk`JMy!GY@1r+TmcK1A?fMf9#n"
+    "bZ~vn?ODew1vXqr8nn6`=c-joC0u#-2hmQVT1x2DNc<7Q0A~R$ebwkn%t3xT>-"
+    "9e?+@0BR;)7=u9drh%mQ$Qy#VCBsTvAr1JG3f+I*P+<n6CslLs$a7uZ?=uF$EFO^~iokp5*oy$up@h5P3PS{`DDf)U6&OLr(BQ9ZqZbhu_$I0m"
+    "4Y=6PbE!h5$LaLulORObh60*IeK<6hwXf-&Hl2Z4KaH%ZG)z!k3VwwdxU;F<?BfK<=4c?oz9@7^>`C+~o3b_Ll0_9*~YxYq--"
+    "<Q4~PwJY4enk9ch;71IWQa!?VV-"
+    "+~WsQ_2NT4c{V!gq5OzU;QLSpcEX0rb3@>xrQOkX`_;a1Rt)>9>Osz8e5zcz<mk;k!{wj6w4>Pbe%OLJJ^bI2<A=xbMag0^sxlfWp8VsjVWD?z"
+    ";`n;>&h=ryb$DZE%`9Ig}B;`vTX>0T>0~3S$t+F-"
+    "R!f)8F#3IKp>dU=qk{;lBF<o4{HH00qHQ&jof%fY+p;R|A*@;0ow4r%IHCf)VJw09@f7Np_08>AssAAAq$2Py*Qg`2ll;?}h?n$W6?BxAD!~PB"
+    "qQ*C<uTf1)xumtEHRy2;Y5y`{yUX70`lC(I?$^UqG3MqXpm!Q#eH07w)?OFvwhT?z<5KfxP|QcLO*CP67N;A=jk)Zp6Sm<lXJQ`vUhqSpymhi_"
+    "^><#(nn%HWgM*wLJ<Oz^Q;xm|v@>UxG&X?t4;PBer_F6_4=UM*FaO`m|t#?}mZ^$PL7O_XTuNArEmvVQv7r3Lq2+<V3meHoVXRI933zU`ikb>A"
+    "o97aGJT1y6-"
+    "l=%dJryN$$HZum*uq08lWP;)S0<6W}#ztf&k00&s=9vo4TZko#_&+KeIhYWLmWfsr$*p<o?=&H`|S#TYErgZpj(6ToT(5HTzQd59GX_v*f+XvO"
+    "ZkjjxLr7&(Uh%wiK51rQ1cKrUMM-H1T}NGkwWI2=M!!MN`>`YZsm0JQnt<AXvE1)s&V0tf{IpeacA-NtW|09XOIf>6Oy9^7|dU@%c<7C<O)7J1"
+    "{i@3zHWEk(C?-)$?FJ6{*wck_A!U{`=EtQ*5j4-"
+    "_MOHvm_d1>g#%AEvoN0YT36@;}0NN075xZm&sxqqSyHwC=l&@3a8&TAWabA*=wD=YI1cQVj09p}<+>dT`&3D;5DunRMR`U;xPe!hQGmA@XXv??"
+    "#Xp(4xz^?~Z9|H46y^G*T^6?Y<jVtPNnM2I9UOcaH%epE&NjjUP~5Am7a0cVmbNAUiep-A2C&AhjU(-MA=HVM_tHf-q4h?QZwo$fPTr0tkiMf-"
+    "HTUFv52u$U#60AZD>X0OwH<2007B6(-"
+    "l>{Z1?4yAdQ4_5K@*JieRWf93B$<ni6~{)piefbx<yHWYeRU`^tR<<p!6;0l|G>UjtWh0_6y3V=e#oB6WT%q4vH;y2#Q(uGsPcjJoH0KES+AmO"
+    "_aBxkW_0r)H?Gr4jM77CrSc(+j!zI*W(kUEAH3b-"
+    "~~>eUjy8>!|jPM+p|)}ntHVuykk?fb7V622RN0gzn)u5eC0g!^t}lCwCw0Ae+79#(oqk?`FYm;=E3kI@po8&_@z(ptFh#t?@?NC8Amb^<Ar?z<"
+    "5K73L`bj{%8VsSQf_ZYU^#r3DZQoQ38@X()6CIadMvSc{dso`mm49(*-h0sL4CP4{XE-"
+    ";EfQ$Koh}AA3{MW3q(rjv;3H^+CdSV=dSQi&;E1xmZ!faz8aGtf)N1cxn<pD?b)V_-"
+    "^d(JBwX3G56ik<?>sQgzv`2SzOJu+~a$n93NsBPmiL4<rtot6fU=E0l0#!55QBC;w3i<K)*NAmEO!Hd^a4oC+ZYHWO4woycSQNgc;oF<dyK<ix"
+    "0Ug|3o6;yJK&j^qGf*?_T`q7enM!KQ)Oz^A9}|z8k>dEOI7KDCqhy%@YcXG2}zdefQ$GNh|-RCgHp3b_t{)<>`}$K+c2vZWwA#GdFYh-"
+    "L%8?EZlcrKsdz83K9y!MD0-kt^g~yi~iug8+LenP?(|MKtA={cLU%w^NHiWn~s|ml~&VzH)hd4#9*O-"
+    "=Y>;jfA`%H!znH~?z_JO#d7aZXsqgdEV}Oo&<Uh{;l3NdBG3vTDr(e2%%>*%1|V7hp}-+#8p3^dRMbiSLc(`LfkVucYWLlEyO;pf3P1^T#-"
+    "Mo!35CH1BE0}yK}MY@_uT-rUM%<Bd{|%%SwTaga|l}n;CVRnYq#{eDB-"
+    ")22Lq7rF!QO&dxzPrO4NE{Xasfv#4I*|+#lR`<5*t+a#g$U#_NXzc{NWc?DJt3=TYD+^4;EjH)3FrCI#RMi<!*b-"
+    "hDToCgf}P;(Fk|o6jQva;J6Qjpva`U=@H8xR<@%i|eBM?!~WJcK#er!gnveneSfQAKZ6eU@?YV_U^m!ZeSl2G!%TA`EYmN&8G<f`Qq)q8$hFi7"
+    "J$-mHv%gUu^t7^BA@>5yBGicCV-"
+    "r%9SYYi?)+9P;kyyT0?_kfc}?<rdjPWlTw(eUZ#6l?cf)Zrlkd+9GkiBZJ6F>(&_m%c)$iX8&c}E2b9xLh5-"
+    ">u+4uf0;p!A82(|m7Y^YPvMRCVWn`8Xfnjei3RVC5KQD0HTJ&jN@TsIYU8`Y7C@mGnR{AK%TN?TY>|AKyKBJ+QQz^YPurUqB?CSu=e1c87ASdK"
+    "bV|*!-!;@{u&dcVn3rpL16MxPl3O<|wAgn%uk|;CIprP!4fZZKH_6eK(qLtG;HLkMG`y0iTPc<qqGy;-"
+    "kJZ3&1mJ{LZSUAj5YXVo+r!{|C1C1=a"
+)
 # Foz do Iguaçu. Coordenadas aproximadas del centro urbano, no del lugar del sensor.
 FOZ_LATITUDE = -25.516
 FOZ_LONGITUDE = -54.585
@@ -116,8 +180,17 @@ def normalise_measurements(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_bundled_measurements() -> pd.DataFrame:
-    # El CSV entregado contiene SOLO DATE/TIME y los dos termopares.
-    raw = pd.read_csv(BUNDLED_FOZ_CSV, sep=",", encoding="utf-8-sig", dtype=str)
+    """Carga T1/T2 del CSV incluido o de la copia embebida si falta en Cloud.
+
+    La copia embebida evita FileNotFoundError cuando GitHub/Streamlit Cloud
+    despliega el código sin `data/`. No consulta servidores externos, no altera
+    la campaña y nunca lee la columna de radiación del archivo original.
+    """
+    if BUNDLED_FOZ_CSV.is_file():
+        raw = pd.read_csv(BUNDLED_FOZ_CSV, sep=",", encoding="utf-8-sig", dtype=str)
+    else:
+        csv_bytes = zlib.decompress(base64.b85decode(_EMBEDDED_FOZ_CSV_B85))
+        raw = pd.read_csv(BytesIO(csv_bytes), sep=",", encoding="utf-8-sig", dtype=str)
     return normalise_measurements(raw)
 
 

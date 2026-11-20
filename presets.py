@@ -535,8 +535,9 @@ def build_experimental_foz_preset() -> tuple[dict[str, Any], dict[str, Any]]:
         FOZ_LATITUDE, FOZ_LONGITUDE, FOZ_UTC_OFFSET,
         apply_measurements, load_bundled_measurements,
     )
-    # Geometría/caudal de arranque del prototipo de Rea/Fiamonzini;
-    # hipótesis EDITABLES, no se atribuyen al nuevo ensayo.
+    # La geometría se toma del colector de Rea Quille (2025): L=2 m,
+    # W=1.10 m, f=0.16 m, D2=0.039 m, D3=0.042 m, 12 volúmenes.
+    # El caudal inicial es una referencia EDITABLE, no una medida de T1/T2.
     cfg, fluids = build_rea_prototype_preset("physical_fixed_ns", dni_source="clear_sky")
     cfg["solar"].update({
         "mode": "fijo_horizontal", "fixed_dni_source": "clear_sky",
@@ -546,6 +547,10 @@ def build_experimental_foz_preset() -> tuple[dict[str, Any], dict[str, Any]]:
         # NO se infieren del sensor de radiación ni se calibran con T2.
     })
     cfg["model"]["internal_correlation"] = "automatica"
+    cfg["preset_meta"] = {
+        **cfg.get("preset_meta", {}),
+        "geometry_source": "Rea Quille (2025) — geometría del prototipo: 2,00 m × 1,10 m, f=0,16 m, D2=0,039 m, D3=0,042 m, N=12, sin vidrio",
+    }
     cfg["solver"].update({"method": "BDF", "rtol": 1e-6, "atol": 1e-7,
                            "max_step_s": 20.0, "use_jac_sparsity": True})
     cfg = apply_measurements(

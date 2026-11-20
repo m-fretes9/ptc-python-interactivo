@@ -28,7 +28,7 @@ Esta extensión parte del paquete **PTC V14.12** que estaba disponible en la con
 
 | Elemento | Valor inicial | Procedencia |
 |---|---|---|
-| Geometría | L=2,0 m; W=1,10 m; N=12 | Preset existente del prototipo Rea/Fiamonzini; confirmar para el montaje real |
+| Geometría | L=2,0 m; W=1,10 m; f=0,16 m; D2=0,039 m; D3=0,042 m; N=12; sin vidrio | Geometría de Rea Quille (2025), confirmada para este preset |
 | Fluido | Agua, sin vidrio | Preset existente; confirmar montaje real |
 | Caudal másico | 0,0192 kg/s | Referencia del prototipo; **NO** medido en este archivo |
 | Temperatura ambiente | 25 °C | Supuesto del preset; **NO** medido en este archivo |
@@ -68,3 +68,13 @@ resultado["table"].to_csv("validacion_experimental.csv", index=False)
 ## Tests
 
 Ejecutar `PYTHONPATH=. pytest -q` desde la carpeta del paquete. Se comprobaron 22 tests (incluyendo el nuevo preset, la serie 495, la exclusión de sensores no autorizados, la interpolación de T1 y la transición de fecha). La pantalla de Streamlit no se ejecutó automáticamente en este entorno por no estar instalada esa dependencia local, aunque figura en `requirements.txt`.
+
+## Despliegue en GitHub / Streamlit Cloud (corrección de FileNotFoundError)
+
+La versión original requiere `data/foz_2026_11_16_termopares.csv` en la raíz del repositorio, junto a `app.py` y `presets.py`. Si GitHub contiene solamente los archivos `.py` pero no la subcarpeta `data/`, el botón **Aplicar preset completo** puede fallar con `FileNotFoundError`.
+
+**Esta revisión resuelve ambos casos:** carga el CSV cuando está disponible; si no está, recupera la misma serie de 495 lecturas de T1/T2 de una copia compacta incorporada en `experimental_validation.py`. La radiación del sensor original no está incluida en esa copia. Las demás campañas siguen importándose con CSV o XLSX desde la interfaz.
+
+Para desplegar el proyecto completo, subir **el contenido** del ZIP descomprimido a la raíz del repositorio, conservar `data/foz_2026_11_16_termopares.csv`, y comprobar que la aplicación arranque con `app.py` desde la raíz. Subir el ZIP como un único archivo a GitHub no lo descomprime.
+
+Esta corrección modifica solo el mecanismo de carga de datos del preset y aclara su geometría. No modifica los balances térmicos ni calibra el modelo con T2.
