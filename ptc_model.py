@@ -8,6 +8,7 @@ físicos del receptor.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from typing import Any, Mapping
 
 import numpy as np
@@ -106,6 +107,19 @@ class PTCSimulator:
         self.dx = float(self.g["L"]) / self.n
         fluid_key = str(self.cfg["operation"]["fluid"])
         self.fluid = FluidPropertyEvaluator(fluid_key, self.fluid_database)
+        profile = self.cfg["operation"].get("Tin_profile")
+        if profile:
+            self._tin_times = np.asarray(profile["t_s"], dtype=float)
+            self._tin_values = np.asarray(profile["Tin_K"], dtype=float)
+        else:
+            self._tin_times = None
+            self._tin_values = None
+
+    def inlet_temperature_K(self, time_s: float) -> float:
+        """Condición de entrada temporal; constante si no hay serie experimental."""
+        if self._tin_times is None:
+            return float(self.cfg["operation"]["Tin_K"])
+        return float(np.interp(float(time_s), self._tin_times, self._tin_values))
 
     def _validate_config(self) -> None:
         g = self.cfg["geometry"]
@@ -121,14 +135,27 @@ class PTCSimulator:
             raise ValueError("El tiempo final debe ser mayor que el inicial.")
         if float(operation["output_step_s"]) <= 0.0:
             raise ValueError("El paso de salida debe ser positivo.")
+        profile = operation.get("Tin_profile")
+        if profile:
+            xp = np.asarray(profile["t_s"], dtype=float)
+            fp = np.asarray(profile["Tin_K"], dtype=float)
+            if (len(xp) < 2 or len(xp) != len(fp) or not np.all(np.isfinite(xp))
+                    or not np.all(np.isfinite(fp)) or np.any(np.diff(xp) <= 0)):
+                raise ValueError("Tin_profile requiere al menos dos instantes y temperaturas válidos y ordenados.")
+            if xp[0] > float(operation["t_start_s"]) + 1e-6 or xp[-1] < float(operation["t_end_s"]) - 1e-6:
+                raise ValueError("Tin_profile debe cubrir el intervalo completo de integración.")
+        output_times = operation.get("output_times_s")
+        if output_times:
+            ts = np.asarray(output_times, dtype=float)
+            if (len(ts) < 2 or not np.all(np.isfinite(ts)) or np.any(np.diff(ts) <= 0)
+                    or ts[0] < float(operation["t_start_s"]) - 1e-6
+                    or ts[-1] > float(operation["t_end_s"]) + 1e-6):
+                raise ValueError("output_times_s requiere tiempos crecientes dentro del período.")
         model = self.cfg["model"]
         re_lam = float(model.get("Re_laminar_max", 2300.0))
         re_turb = float(model.get("Re_turbulent_min", 4000.0))
         if re_lam <= 0.0 or re_turb <= re_lam:
             raise ValueError("Debe cumplirse 0 < Re_laminar_max < Re_turbulent_min.")
-        entrance_factor = float(model.get("thermal_entrance_factor", 0.05))
-        if entrance_factor <= 0.0:
-            raise ValueError("thermal_entrance_factor debe ser positivo.")
 
     def simulate(self) -> SimulationResult:
         operation = self.cfg["operation"]
@@ -136,14 +163,18 @@ class PTCSimulator:
         t_start = float(operation["t_start_s"])
         t_end = float(operation["t_end_s"])
         output_step = float(operation["output_step_s"])
-        t_eval = np.arange(t_start, t_end + 0.5 * output_step, output_step, dtype=float)
-        t_eval = t_eval[t_eval <= t_end]
-        if t_eval.size == 0 or t_eval[-1] < t_end:
-            t_eval = np.append(t_eval, t_end)
+        if operation.get("output_times_s"):
+            # Con mediciones, devolver exactamente un punto por instante real.
+            t_eval = np.asarray(operation["output_times_s"], dtype=float)
+        else:
+            t_eval = np.arange(t_start, t_end + 0.5 * output_step, output_step, dtype=float)
+            t_eval = t_eval[t_eval <= t_end]
+            if t_eval.size == 0 or t_eval[-1] < t_end:
+                t_eval = np.append(t_eval, t_end)
 
         n_states = 3 * self.n
         y0 = np.empty(n_states, dtype=float)
-        y0[: self.n] = float(operation["Tin_K"])
+        y0[: self.n] = self.inlet_temperature_K(t_start)
         y0[self.n : 2 * self.n] = float(self.cfg["environment"]["Tamb_K"])
         y0[2 * self.n :] = float(self.cfg["environment"]["Tamb_K"])
 
@@ -173,6 +204,7 @@ class PTCSimulator:
         # solve_ivp devuelve y con forma (n_estados, n_tiempos).
         y = solution.y.T
         scalar_names = [
+            "Tin_C",
             "DNI_W_m2",
             "solar_time_h",
             "theta_deg",
@@ -214,9 +246,6 @@ class PTCSimulator:
             "h_internal_W_m2K",
             "transition_weight",
             "Graetz_internal",
-            "thermal_entrance_length_m",
-            "x_over_Lth_internal",
-            "x_center_internal_m",
             "h_external_W_m2K",
             "rho_kg_m3",
             "mu_Pa_s",
@@ -300,9 +329,6 @@ class PTCSimulator:
                 "h_internal_W_m2K",
                 "transition_weight",
                 "Graetz_internal",
-                "thermal_entrance_length_m",
-                "x_over_Lth_internal",
-                "x_center_internal_m",
                 "h_external_W_m2K",
                 "rho_kg_m3",
                 "mu_Pa_s",
@@ -327,7 +353,7 @@ class PTCSimulator:
         sky = effective_sky_temperature(time_s, cfg["environment"])
         Tsky = float(sky["Tsky_K"])
         mdot = float(cfg["operation"]["mdot"])
-        Tin = float(cfg["operation"]["Tin_K"])
+        Tin = self.inlet_temperature_K(time_s)
 
         for i in range(n):
             Tup = Tin if i == 0 else Tf[i - 1]
@@ -343,9 +369,6 @@ class PTCSimulator:
                 float(cfg["model"].get("Re_laminar_max", 2300.0)),
                 float(cfg["model"].get("Re_turbulent_min", 4000.0)),
                 characteristic_length_m=float(g["L"]),
-                x_start_m=float(i * self.dx),
-                x_end_m=float((i + 1) * self.dx),
-                thermal_entrance_factor=float(cfg["model"].get("thermal_entrance_factor", 0.05)),
             )
 
             Aint = np.pi * float(g["D2"]) * self.dx
@@ -497,9 +520,6 @@ class PTCSimulator:
             arrays["h_internal_W_m2K"][i] = conv_int["h_W_m2K"]
             arrays["transition_weight"][i] = conv_int["transition_weight"]
             arrays["Graetz_internal"][i] = conv_int["Graetz"]
-            arrays["thermal_entrance_length_m"][i] = conv_int["thermal_entrance_length_m"]
-            arrays["x_over_Lth_internal"][i] = conv_int["x_over_Lth"]
-            arrays["x_center_internal_m"][i] = conv_int["x_center_m"]
             arrays["rho_kg_m3"][i] = prop.rho
             arrays["mu_Pa_s"][i] = prop.mu
             arrays["Cp_J_kgK"][i] = prop.Cp
@@ -548,6 +568,7 @@ class PTCSimulator:
         output: dict[str, Any] = {
             "dYdt": np.concatenate((arrays["dTf"], arrays["dTabs"], arrays["dTglass"])),
             **solar,
+            "Tin_C": float(Tin - 273.15),
             "Quseful_W": Quseful,
             "Qloss_W": Qloss,
             "eta_pct": eta,
@@ -572,7 +593,18 @@ class PTCSimulator:
         solar = self.cfg["solar"]
         mode = str(solar["mode"]).lower()
         LAT_h = float(time_s) / 3600.0
-        solar_time_h = LAT_h
+        # Para series medidas de varios días, utilizar la fecha civil real:
+        # solar.date_origin define el día local correspondiente a t_s=0.
+        origin = solar.get("date_origin")
+        if origin:
+            local_dt = datetime.combine(date.fromisoformat(str(origin)), time.min) + timedelta(seconds=float(time_s))
+            clock_h = (local_dt.hour + local_dt.minute / 60.0
+                       + local_dt.second / 3600.0 + local_dt.microsecond / 3.6e9)
+            calendar_day = local_dt.timetuple().tm_yday
+        else:
+            clock_h = LAT_h
+            calendar_day = float(solar["day_of_year"])
+        solar_time_h = clock_h
 
         if mode == "constante":
             DNI = max(float(solar["DNI_constant_W_m2"]), 0.0)
@@ -585,7 +617,7 @@ class PTCSimulator:
             # a cada instante; por eso cos(theta), IAM y EndLoss varían aunque el
             # colector no se mueva.
             phi = float(solar["latitude_deg"])
-            day = float(solar["day_of_year"])
+            day = float(calendar_day)
             delta = 23.45 * np.sin(np.deg2rad(360.0 * (284.0 + day) / 365.0))
 
             # Las horas experimentales normalmente son hora civil. Para comparar
@@ -598,9 +630,9 @@ class PTCSimulator:
                 eot_min = 9.87 * np.sin(2.0 * B_eot) - 7.53 * np.cos(B_eot) - 1.5 * np.sin(B_eot)
                 lstm_deg = 15.0 * utc_offset
                 time_correction_min = 4.0 * (longitude - lstm_deg) + eot_min
-                solar_time_h = LAT_h + time_correction_min / 60.0
+                solar_time_h = clock_h + time_correction_min / 60.0
             else:
-                solar_time_h = LAT_h
+                solar_time_h = clock_h
 
             omega = 15.0 * (12.0 - solar_time_h)
             cos_z = (
@@ -653,9 +685,9 @@ class PTCSimulator:
             cos_z = cos_theta
         else:
             phi = float(solar["latitude_deg"])
-            day = float(solar["day_of_year"])
+            day = float(calendar_day)
             delta = 23.45 * np.sin(np.deg2rad(360.0 * (284.0 + day) / 365.0))
-            omega = 15.0 * (12.0 - LAT_h)
+            omega = 15.0 * (12.0 - clock_h)
             cos_z = (
                 np.sin(np.deg2rad(phi)) * np.sin(np.deg2rad(delta))
                 + np.cos(np.deg2rad(phi))
@@ -767,24 +799,17 @@ def internal_convection(
     re_laminar_max: float = 2300.0,
     re_turbulent_min: float = 4000.0,
     characteristic_length_m: float | None = None,
-    x_start_m: float | None = None,
-    x_end_m: float | None = None,
-    thermal_entrance_factor: float = 0.05,
 ) -> dict[str, Any]:
-    """Coeficiente convectivo interno con desarrollo térmico axial explícito.
+    """Coeficiente convectivo interno con transición continua de régimen.
 
-    El modo ``automatica_hausen`` usa Hausen en la región laminar de entrada
-    y recupera Nu=4.36 una vez superada la longitud térmica de entrada
-    L_th = C_th Re Pr D. En una discretización por volúmenes finitos no se
-    evalúa Hausen simplemente en el centro del nodo: se interpreta su Nu
-    como valor medio acumulado desde la entrada y se obtiene un Nu efectivo
-    para cada volumen a partir de la diferencia entre las integrales
-    acumuladas en sus caras.
+    El modelo anterior conmutaba de Nu=4.36 a Gnielinski exactamente en
+    Re=2300. Esa discontinuidad en Nu y h producía picos artificiales cuando
+    la viscosidad dependiente de T hacía cruzar el umbral durante el día.
 
-    Entre Re_laminar_max y Re_turbulent_min se mezcla suavemente la rama
-    laminar axial con Gnielinski. Para Re >= Re_turbulent_min se usa
-    Gnielinski. El modo ``automatica`` se conserva como legado (Nu=4.36 en
-    laminar) para reproducibilidad de archivos antiguos.
+    En modo automático/Gnielinski se usa Nu=4.36 hasta re_laminar_max,
+    Gnielinski a partir de re_turbulent_min y una mezcla smoothstep entre
+    ambos en la zona de transición. Dittus-Boelter forzado conserva su
+    comportamiento explícito para estudios de sensibilidad.
     """
     Re = 4.0 * mdot / (np.pi * diameter_m * prop.mu)
     Pr = prop.Pr
@@ -815,44 +840,12 @@ def internal_convection(
 
     length_m = max(float(characteristic_length_m or diameter_m), diameter_m)
     graetz = max(Re * Pr * diameter_m / length_m, 0.0)
-    entrance_factor = max(float(thermal_entrance_factor), np.finfo(float).eps)
-    thermal_entrance_length = max(entrance_factor * Re * Pr * diameter_m, 0.0)
 
-    def _hausen_mean_nu(distance_m: float) -> float:
-        """Nu medio acumulado desde la entrada hasta ``distance_m``."""
-        x = max(float(distance_m), np.finfo(float).eps)
-        gz_x = max(Re * Pr * diameter_m / x, 0.0)
-        correction = 0.0668 * gz_x / (1.0 + 0.04 * gz_x ** (2.0 / 3.0))
+    def _hausen_heat_flux_nu() -> float:
+        # Correlación media de entrada laminar. Se conserva Nu=4.36 como
+        # límite plenamente desarrollado para flujo circular con q'' uniforme.
+        correction = 0.0668 * graetz / (1.0 + 0.04 * max(graetz, 0.0) ** (2.0 / 3.0))
         return max(4.36 + correction, 4.36)
-
-    def _hausen_cumulative_nu_length(distance_m: float) -> float:
-        """Integral acumulada de Nu dx usada para obtener Nu por volumen.
-
-        Hasta L_th se usa el Nu medio de Hausen. Aguas abajo se prolonga la
-        integral con Nu=4.36, de modo que un volumen completamente ubicado
-        después de L_th queda exactamente en régimen térmicamente desarrollado.
-        """
-        x = max(float(distance_m), 0.0)
-        if x <= 0.0:
-            return 0.0
-        if thermal_entrance_length <= np.finfo(float).eps:
-            return 4.36 * x
-        x_dev = min(x, thermal_entrance_length)
-        cumulative = x_dev * _hausen_mean_nu(x_dev)
-        if x > thermal_entrance_length:
-            cumulative += 4.36 * (x - thermal_entrance_length)
-        return float(cumulative)
-
-    def _hausen_segment_nu() -> float:
-        """Nu efectivo del volumen [x_start, x_end] por balance acumulado."""
-        if x_start_m is None or x_end_m is None:
-            # Compatibilidad con auditorías antiguas que trataban todo el tubo
-            # mediante un Nu medio global evaluado con la longitud característica.
-            return _hausen_mean_nu(length_m)
-        x0 = max(float(x_start_m), 0.0)
-        x1 = max(float(x_end_m), x0 + np.finfo(float).eps)
-        integral = _hausen_cumulative_nu_length(x1) - _hausen_cumulative_nu_length(x0)
-        return max(float(integral / (x1 - x0)), 4.36)
 
     def _sieder_tate_laminar_nu() -> float:
         # Correlación media de entrada térmica/hidrodinámica. El factor de
@@ -867,9 +860,9 @@ def internal_convection(
         weight = 0.0
         correlation = "Laminar plenamente desarrollado Nu=4.36"
     elif normalized_mode == "hausen_laminar":
-        Nu = _hausen_mean_nu(length_m)
+        Nu = _hausen_heat_flux_nu()
         weight = 0.0
-        correlation = "Hausen laminar medio global (q'' uniforme)"
+        correlation = "Hausen laminar en desarrollo (q'' uniforme)"
     elif normalized_mode == "sieder_tate_laminar":
         Nu = _sieder_tate_laminar_nu()
         weight = 0.0
@@ -878,25 +871,6 @@ def internal_convection(
         Nu = _dittus_boelter_nu(Re)
         weight = 1.0
         correlation = "Dittus-Boelter forzado"
-    elif normalized_mode in {"automatica_hausen", "hausen_local"}:
-        Nu_lam = _hausen_segment_nu()
-        if Re <= re_lam:
-            Nu = Nu_lam
-            weight = 0.0
-            x_mid = 0.5 * (float(x_start_m or 0.0) + float(x_end_m or length_m))
-            correlation = (
-                "Hausen local · entrada térmica"
-                if x_mid < thermal_entrance_length
-                else "Laminar térmicamente desarrollado · Nu=4.36"
-            )
-        else:
-            weight = _smoothstep_weight(Re)
-            Nu_turb = _gnielinski_nu(Re)
-            Nu = (1.0 - weight) * Nu_lam + weight * Nu_turb
-            correlation = (
-                "Transición suave Hausen-Gnielinski"
-                if Re < re_turb else "Gnielinski-Forristall"
-            )
     elif Re <= re_lam:
         Nu = 4.36
         weight = 0.0
@@ -926,12 +900,6 @@ def internal_convection(
         "h_W_m2K": float(Nu * prop.k / diameter_m),
         "transition_weight": float(weight),
         "Graetz": float(graetz),
-        "thermal_entrance_length_m": float(thermal_entrance_length),
-        "x_center_m": float(0.5 * ((x_start_m or 0.0) + (x_end_m or length_m))),
-        "x_over_Lth": float(
-            0.5 * ((x_start_m or 0.0) + (x_end_m or length_m))
-            / max(thermal_entrance_length, np.finfo(float).eps)
-        ),
         "correlation": correlation,
     }
 

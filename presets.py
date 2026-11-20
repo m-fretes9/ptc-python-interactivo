@@ -104,10 +104,9 @@ def _apply_rea_geometry(cfg: dict[str, Any]) -> None:
         {
             "has_glass": False,
             "annulus": "vacio_ideal",
-            "internal_correlation": "automatica_hausen",
+            "internal_correlation": "automatica",
             "Re_laminar_max": 2300.0,
             "Re_turbulent_min": 4000.0,
-            "thermal_entrance_factor": 0.05,
             "include_supports": False,
         }
     )
@@ -530,8 +529,35 @@ def build_base_preset() -> tuple[dict[str, Any], dict[str, Any]]:
     return cfg, default_fluid_database()
 
 
+def build_experimental_foz_preset() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Ensayo experimental 16/11/2026. No cambia los presets bibliográficos."""
+    from experimental_validation import (
+        FOZ_LATITUDE, FOZ_LONGITUDE, FOZ_UTC_OFFSET,
+        apply_measurements, load_bundled_measurements,
+    )
+    # Geometría/caudal de arranque del prototipo de Rea/Fiamonzini;
+    # hipótesis EDITABLES, no se atribuyen al nuevo ensayo.
+    cfg, fluids = build_rea_prototype_preset("physical_fixed_ns", dni_source="clear_sky")
+    cfg["solar"].update({
+        "mode": "fijo_horizontal", "fixed_dni_source": "clear_sky",
+        "latitude_deg": FOZ_LATITUDE, "longitude_deg": FOZ_LONGITUDE,
+        "utc_offset_h": FOZ_UTC_OFFSET, "clock_time_correction": True,
+        # A=713.35 y B=0.131 provienen del modelo de cielo claro existente;
+        # NO se infieren del sensor de radiación ni se calibran con T2.
+    })
+    cfg["model"]["internal_correlation"] = "automatica"
+    cfg["solver"].update({"method": "BDF", "rtol": 1e-6, "atol": 1e-7,
+                           "max_step_s": 20.0, "use_jac_sparsity": True})
+    cfg = apply_measurements(
+        cfg, load_bundled_measurements(),
+        source="Termopares T1/T2 · dia 16_1_3420.xlsx (16/11/2026)",
+    )
+    return cfg, fluids
+
+
 PRESET_FAMILY_LABELS = {
     "base": "Base editable",
+    "experimental_foz_2026_11_16": "Experimental · Foz · termopares 16/11/2026",
     "rea_prototype": "Rea Quille — prototipo Foz 23/10/2021",
     "rea_foz_monthly": "Rea Quille — Foz do Iguaçu (Tabela 10)",
     "rea_alvorada_monthly": "Rea Quille — Alvorada do Norte (Tabela 11)",
@@ -549,6 +575,8 @@ def build_preset(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if family == "base":
         return build_base_preset()
+    if family == "experimental_foz_2026_11_16":
+        return build_experimental_foz_preset()
     if family == "rea_prototype":
         return build_rea_prototype_preset(variant or "trnsys_published", dni_source=dni_source)
     if family == "rea_foz_monthly":

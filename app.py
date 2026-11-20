@@ -10,9 +10,13 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
 
 
 from defaults import default_config, default_fluid_database
+from experimental_validation import (
+    apply_measurements, load_measurements_upload, run_experimental_validation,
+)
 from interactive_visuals import ptc_optical_component_html, thermal_circuit_component_html
 from presets import MONTH_NAMES_ES, PRESET_FAMILY_LABELS, build_preset, preset_summary_rows
 from fluid_properties import FluidPropertyEvaluator, property_curve
@@ -44,7 +48,6 @@ from validations import (
     validate_bhambare,
     validate_rea_quille_city_monthly,
     validate_tcc_monthly,
-    validate_rea_quille_foz_hausen,
 )
 from visualizations import (
     axial_profiles,
@@ -58,8 +61,6 @@ from visualizations import (
     sensitivity_tornado_figure,
     validation_bhambare_figure,
     validation_tcc_figure,
-    validation_rea_foz_figure,
-    validation_rea_foz_error_figure,
     validation_monthly_comparison_figure,
     validation_holdout_error_figure,
     validation_prediction_scatter_figure,
@@ -620,8 +621,13 @@ with st.sidebar:
             index=list(fluid_db.keys()).index(operation["fluid"]),
         )
         operation["mdot"] = st.number_input("Caudal másico (kg/s)", min_value=1e-5, value=float(operation["mdot"]), format="%.6f")
-        Tin_C = st.number_input("Temperatura de entrada (°C)", value=float(operation["Tin_K"] - 273.15), step=1.0)
-        operation["Tin_K"] = Tin_C + 273.15
+        experimental_active = bool(cfg.get("experimental_validation"))
+        Tin_C = st.number_input("Temperatura de entrada (°C)", value=float(operation["Tin_K"] - 273.15),
+                                step=1.0, disabled=experimental_active)
+        if not experimental_active:
+            operation["Tin_K"] = Tin_C + 273.15
+        else:
+            st.caption("Tin(t) viene del termopar 1 y se interpola entre las lecturas.")
         Tamb_C = st.number_input("Temperatura ambiente (°C)", value=float(environment["Tamb_K"] - 273.15), step=1.0)
         environment["Tamb_K"] = Tamb_C + 273.15
 
@@ -686,10 +692,13 @@ with st.sidebar:
 
         environment["wind_m_s"] = st.number_input("Viento (m/s)", min_value=0.0, value=float(environment["wind_m_s"]), step=0.1)
         environment["pressure_Pa"] = st.number_input("Presión ambiente (Pa)", min_value=1000.0, value=float(environment["pressure_Pa"]), step=100.0)
-        t_start_h = st.number_input("Hora inicial LAT", value=float(operation["t_start_s"] / 3600.0), step=0.5)
-        t_end_h = st.number_input("Hora final LAT", value=float(operation["t_end_s"] / 3600.0), step=0.5)
-        operation["t_start_s"] = t_start_h * 3600.0
-        operation["t_end_s"] = t_end_h * 3600.0
+        t_start_h = st.number_input("Hora inicial LAT", value=float(operation["t_start_s"] / 3600.0), step=0.5,
+                                     disabled=experimental_active)
+        t_end_h = st.number_input("Hora final LAT", value=float(operation["t_end_s"] / 3600.0), step=0.5,
+                                   disabled=experimental_active)
+        if not experimental_active:
+            operation["t_start_s"] = t_start_h * 3600.0
+            operation["t_end_s"] = t_end_h * 3600.0
         operation["output_step_s"] = st.number_input("Paso de salida (s)", min_value=1.0, value=float(operation["output_step_s"]), step=10.0)
 
     with st.expander("Irradiación y óptica", expanded=True):
@@ -719,26 +728,33 @@ with st.sidebar:
             solar["DNI_constant_W_m2"] = st.number_input("DNI constante (W/m²)", min_value=0.0, value=float(solar["DNI_constant_W_m2"]), step=10.0)
             solar["angle_constant_deg"] = st.number_input("Ángulo de incidencia (°)", min_value=0.0, max_value=90.0, value=float(solar["angle_constant_deg"]), step=1.0)
         elif selected_mode == "fijo_horizontal":
-            solar["day_of_year"] = st.number_input("Día del año", min_value=1, max_value=366, value=int(solar["day_of_year"]), step=1, key="fixed_doy")
-            solar["latitude_deg"] = st.number_input("Latitud (°)", min_value=-90.0, max_value=90.0, value=float(solar["latitude_deg"]), step=0.1, key="fixed_lat")
+            solar["day_of_year"] = st.number_input("Día del año", min_value=1, max_value=366, value=int(solar["day_of_year"]), step=1,
+                                                   key=widget_key("fixed_doy"), disabled=bool(solar.get("date_origin")))
+            if solar.get("date_origin"):
+                st.caption("Día calculado automáticamente desde DATE; admite series de varios días.")
+            solar["latitude_deg"] = st.number_input("Latitud (°)", min_value=-90.0, max_value=90.0, value=float(solar["latitude_deg"]), step=0.1, key=widget_key("fixed_lat"))
+            solar["longitude_deg"] = st.number_input("Longitud (°)", min_value=-180.0, max_value=180.0,
+                                                       value=float(solar.get("longitude_deg", -54.585)), step=0.01, key=widget_key("fixed_lon"))
+            solar["utc_offset_h"] = st.number_input("Fuso UTC civil (h)", min_value=-12.0, max_value=14.0,
+                                                     value=float(solar.get("utc_offset_h", -3.0)), step=1.0, key=widget_key("fixed_utc"))
+            solar["clock_time_correction"] = st.checkbox("Convertir hora civil → hora solar aparente",
+                                                          value=bool(solar.get("clock_time_correction", True)), key=widget_key("fixed_clock_corr"))
             source_labels = {"temporal_clear_sky_905": "Temporal cielo claro · 905 W/m² al mediodía", "nominal": "DNI nominal constante", "clear_sky": "Cielo claro A·exp(-B/cos z)"}
             source_keys = list(source_labels.keys())
             current_source = str(solar.get("fixed_dni_source", "nominal"))
             if current_source not in source_keys:
                 current_source = "nominal"
             solar["fixed_dni_source"] = st.selectbox(
-                "Fuente DNI", source_keys, index=source_keys.index(current_source), format_func=lambda key: source_labels[key], key="fixed_dni_source_ui"
+                "Fuente DNI", source_keys, index=source_keys.index(current_source), format_func=lambda key: source_labels[key], key=widget_key("fixed_dni_source_ui")
             )
             if solar["fixed_dni_source"] == "nominal":
-                solar["DNI_constant_W_m2"] = st.number_input("DNI nominal (W/m²)", min_value=0.0, value=float(solar["DNI_constant_W_m2"]), step=10.0, key="fixed_dni_nominal")
+                solar["DNI_constant_W_m2"] = st.number_input("DNI nominal (W/m²)", min_value=0.0, value=float(solar["DNI_constant_W_m2"]), step=10.0, key=widget_key("fixed_dni_nominal"))
             elif solar["fixed_dni_source"] == "temporal_clear_sky_905":
-                solar["DNI_noon_W_m2"] = st.number_input("DNI al mediodía solar (W/m²)", min_value=0.0, value=float(solar.get("DNI_noon_W_m2", 905.0)), step=10.0, key="fixed_dni_noon")
-                solar["B"] = st.number_input("Coeficiente atmosférico B", min_value=0.0, value=float(solar["B"]), step=0.001, format="%.4f", key="fixed_B_norm")
-                solar["utc_offset_h"] = st.number_input("UTC local (h)", min_value=-12.0, max_value=14.0, value=float(solar.get("utc_offset_h", -3.0)), step=1.0, key="fixed_utc")
-                solar["clock_time_correction"] = st.checkbox("Convertir hora civil → hora solar aparente", value=bool(solar.get("clock_time_correction", True)), key="fixed_clock_corr")
+                solar["DNI_noon_W_m2"] = st.number_input("DNI al mediodía solar (W/m²)", min_value=0.0, value=float(solar.get("DNI_noon_W_m2", 905.0)), step=10.0, key=widget_key("fixed_dni_noon"))
+                solar["B"] = st.number_input("Coeficiente atmosférico B", min_value=0.0, value=float(solar["B"]), step=0.001, format="%.4f", key=widget_key("fixed_B_norm"))
             else:
-                solar["A"] = st.number_input("Constante A (W/m²)", min_value=0.0, value=float(solar["A"]), step=1.0, key="fixed_A")
-                solar["B"] = st.number_input("Constante B", min_value=0.0, value=float(solar["B"]), step=0.001, format="%.4f", key="fixed_B")
+                solar["A"] = st.number_input("Constante A (W/m²)", min_value=0.0, value=float(solar["A"]), step=1.0, key=widget_key("fixed_A"))
+                solar["B"] = st.number_input("Constante B", min_value=0.0, value=float(solar["B"]), step=0.001, format="%.4f", key=widget_key("fixed_B"))
             st.caption("Sin tracking: el colector permanece fijo. θ, irradiancia proyectada sobre la apertura, IAM y EndLoss cambian con la hora.")
         else:
             st.info("Edite el perfil completo en la pestaña Propiedades e irradiación.")
@@ -774,32 +790,11 @@ with st.sidebar:
             model["annulus_h_effective_W_m2K"] = st.number_input(
                 "h anular efectivo (W/m² K)", min_value=0.0, value=float(model["annulus_h_effective_W_m2K"]), step=0.01
             )
-        correlation_options = [
-            "automatica_hausen",
-            "automatica",
-            "hausen_local",
-            "laminar_436_forzado",
-            "dittusboelter",
-            "dittusboelter_forzado",
-            "gnielinski",
-        ]
-        correlation_labels = {
-            "automatica_hausen": "Automática · Hausen local → Nu=4.36 → Gnielinski",
-            "automatica": "Automática legado · Nu=4.36 → Gnielinski",
-            "hausen_local": "Hausen local por volumen · desarrollo térmico",
-            "laminar_436_forzado": "Laminar desarrollado forzado · Nu=4.36",
-            "dittusboelter": "Dittus–Boelter con transición",
-            "dittusboelter_forzado": "Dittus–Boelter forzado",
-            "gnielinski": "Gnielinski con transición",
-        }
-        current_correlation = model.get("internal_correlation", "automatica_hausen")
-        if current_correlation not in correlation_options:
-            current_correlation = "automatica_hausen"
+        correlation_options = ["automatica", "dittusboelter", "dittusboelter_forzado", "gnielinski"]
         model["internal_correlation"] = st.selectbox(
             "Correlación interna",
             correlation_options,
-            index=correlation_options.index(current_correlation),
-            format_func=lambda value: correlation_labels[value],
+            index=correlation_options.index(model["internal_correlation"]),
         )
         if model["internal_correlation"] != "dittusboelter_forzado":
             re_cols = st.columns(2)
@@ -815,24 +810,10 @@ with st.sidebar:
                 value=max(float(model.get("Re_turbulent_min", 4000.0)), float(model["Re_laminar_max"]) + 1.0),
                 step=100.0,
             )
-            if model["internal_correlation"] in {"automatica_hausen", "hausen_local"}:
-                model["thermal_entrance_factor"] = st.number_input(
-                    "Factor de longitud de entrada térmica · Lth = C·Re·Pr·D",
-                    min_value=0.001,
-                    max_value=0.20,
-                    value=float(model.get("thermal_entrance_factor", 0.05)),
-                    step=0.005,
-                    format="%.3f",
-                )
-                st.caption(
-                    "Hausen se evalúa por volumen a partir de sus caras axiales. Al superar Lth, "
-                    "la rama laminar usa exactamente Nu=4.36; en transición se mezcla suavemente con Gnielinski."
-                )
-            else:
-                st.caption(
-                    "Entre ambos Reynolds se interpola suavemente Nu para evitar saltos no físicos "
-                    "al cruzar de laminar a transición/turbulento."
-                )
+            st.caption(
+                "Entre ambos Reynolds se interpola suavemente Nu para evitar saltos no físicos "
+                "al cruzar de laminar a transición/turbulento."
+            )
         model["include_supports"] = st.checkbox("Incluir pérdidas en soportes", value=bool(model["include_supports"]))
         if model["include_supports"]:
             model["support_loss_fraction"] = st.number_input(
@@ -897,7 +878,7 @@ if st.session_state.results and st.session_state.result_signature != project_sig
 
 main_section = st.radio(
     "Sección principal",
-    ["Simulación", "Propiedades", "Validación", "Gráficos", "Sensibilidad"],
+    ["Simulación", "Propiedades", "Validación experimental", "Validación", "Gráficos", "Sensibilidad"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_section_v14",
@@ -905,6 +886,7 @@ main_section = st.radio(
 st.caption({
     "Simulación": "Resultados, análisis nodal y exportación del caso activo.",
     "Propiedades": "Irradiación, cielo y propiedades termofísicas del HTF.",
+    "Validación experimental": "T1 como entrada, T2 como referencia y DNI calculada por posición solar.",
     "Validación": "Calibración con muestra y prueba fuera de muestra con parámetros congelados.",
     "Gráficos": "Comparativas visuales y trazables de la última validación fuera de muestra.",
     "Sensibilidad": "Convergencia numérica y efecto de perturbaciones paramétricas sobre las salidas.",
@@ -1329,85 +1311,525 @@ elif main_section == "Propiedades":
     st.caption("Este perfil se usa cuando el modo de irradiación es Perfil horario editable.")
 
 
+elif main_section == "Validación experimental":
+    st.subheader("Validación experimental por termopares · Foz do Iguaçu")
+    st.write("Se utiliza T1(t) como condición de entrada del HTF y se compara la temperatura de salida predicha "
+             "con T2(t) en los mismos instantes medidos. La irradiancia es estimada por cielo claro: "
+             "no se importa ni utiliza la columna de radiación del sensor.")
+    active_exp = cfg.get("experimental_validation")
+    if not active_exp:
+        st.info("Seleccione en la barra lateral el preset Experimental · Foz · termopares 16/11/2026 y pulse Aplicar preset completo.")
+    else:
+        reference = pd.DataFrame({
+            "DATE": active_exp["DATE"], "TIME": active_exp["TIME"],
+            "Tin_exp_C": active_exp["Tin_exp_C"], "Tout_exp_C": active_exp["Tout_exp_C"],
+        })
+        cols = st.columns(3)
+        cols[0].metric("Registros", f"{len(reference)}")
+        cols[1].metric("Primera lectura", f"{reference.iloc[0]['DATE']} · {reference.iloc[0]['TIME']}")
+        cols[2].metric("Última lectura", f"{reference.iloc[-1]['DATE']} · {reference.iloc[-1]['TIME']}")
+        negative = int((reference["Tout_exp_C"] < reference["Tin_exp_C"]).sum())
+        if negative:
+            st.warning(f"Hay {negative} instantes con T2 < T1. Se conservan sin invertir termopares "
+                       "ni aplicar filtros automáticos; pueden reflejar transitorios o requerir comprobación experimental.")
+        if str(cfg["solar"].get("mode", "")).lower() != "fijo_horizontal" or str(cfg["solar"].get("fixed_dni_source", "")) != "clear_sky":
+            st.info("La configuración solar se modificó: esta validación originalmente usa cielo claro A·exp(-B/cos z) "
+                    "y cálculo horario con latitud, longitud y zona civil.")
+        st.caption("Los valores de caudal, geometría, T ambiente, viento y coeficientes atmosféricos son "
+                   "configuración del modelo, NO mediciones extraídas del archivo.")
+
+    with st.expander("Importar una nueva campaña experimental (CSV o XLSX)", expanded=False):
+        upload_exp = st.file_uploader("Planilla con DATE, TIME, termopar_1 y termopar_2", type=["csv", "xlsx"], key="exp_upload")
+        st.caption("Puede contener otras columnas: se ignoran por completo. Admite fechas distintas y mediciones de varios días.")
+        if st.button("Cargar termopares al preset", disabled=upload_exp is None, key="exp_load", width="stretch"):
+            try:
+                measured_df = load_measurements_upload(upload_exp.getvalue(), upload_exp.name)
+                base_cfg = deepcopy(cfg)
+                if not base_cfg.get("experimental_validation"):
+                    base_cfg, _ = build_preset("experimental_foz_2026_11_16")
+                st.session_state.config = apply_measurements(base_cfg, measured_df, source=upload_exp.name)
+                st.session_state.results = {}
+                st.session_state.validations = {}
+                st.session_state.result_signature = None
+                st.session_state.ui_revision += 1
+                st.rerun()
+            except Exception as exc:
+                st.error(f"No fue posible importar las mediciones: {exc}")
+
+    if active_exp:
+        if st.button("Ejecutar validación temporal T2 vs modelo", type="primary", key="exp_execute", width="stretch"):
+            try:
+                with st.spinner("Integrando el balance térmico en los instantes medidos..."):
+                    validation = run_experimental_validation(deepcopy(cfg), fluid_db)
+                validation["signature"] = project_signature()
+                st.session_state.validations["experimental_series"] = validation
+            except Exception as exc:
+                st.exception(exc)
+        output = st.session_state.validations.get("experimental_series")
+        if isinstance(output, dict) and output.get("signature") != project_signature():
+            st.info("Los parámetros cambiaron; ejecute de nuevo la validación para actualizar las curvas.")
+            output = None
+        if output:
+            metrics = output["metrics"]
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("RMSE T2", f"{metrics['RMSE_Tout_C']:.3f} °C")
+            metric_cols[1].metric("MAE T2", f"{metrics['MAE_Tout_C']:.3f} °C")
+            metric_cols[2].metric("Sesgo modelo − T2", f"{metrics['Bias_Tout_C']:+.3f} °C")
+            metric_cols[3].metric("Error absoluto máximo", f"{metrics['Max_abs_error_C']:.3f} °C")
+            comp = output["table"]
+            xlabels = pd.to_datetime(comp["DATE"] + " " + comp["TIME"],
+                                     format="%d/%m/%Y %H:%M:%S")
+            chart_temp = go.Figure()
+            chart_temp.add_trace(go.Scatter(x=xlabels, y=comp["Tin_exp_C"], name="T1 · entrada medida", mode="lines"))
+            chart_temp.add_trace(go.Scatter(x=xlabels, y=comp["Tout_exp_C"], name="T2 · salida medida", mode="lines"))
+            chart_temp.add_trace(go.Scatter(x=xlabels, y=comp["Tout_model_C"], name="Salida calculada", mode="lines"))
+            chart_temp.update_layout(title="Evolución térmica de la campaña", xaxis_title="Fecha y hora civil", yaxis_title="Temperatura (°C)")
+            st.plotly_chart(chart_temp, width="stretch", key="exp_temperatures_chart")
+            chart_solar = go.Figure()
+            chart_solar.add_trace(go.Scatter(x=xlabels, y=comp["DNI_synthetic_W_m2"], mode="lines", name="DNI estimada"))
+            chart_solar.add_trace(go.Scatter(x=xlabels, y=comp["G_aperture_model_W_m2"], mode="lines", name="Irradiancia proyectada"))
+            chart_solar.update_layout(title="Irradiación de cielo claro calculada (no medida)", xaxis_title="Fecha y hora civil", yaxis_title="W/m²")
+            st.plotly_chart(chart_solar, width="stretch", key="exp_solar_chart")
+            st.dataframe(comp, width="stretch", hide_index=True)
+            st.download_button("Descargar comparación (CSV)", data=comp.to_csv(index=False).encode("utf-8-sig"),
+                               file_name="validacion_experimental_termopares_foz.csv", mime="text/csv", width="stretch", key="exp_export")
+            st.caption(output["note"])
+
 elif main_section == "Validación":
     st.subheader("Validación del modelo")
     st.write(
-        "Esta sección se simplificó para mostrar exclusivamente la comparación mensual de Rea Quille en Foz do Iguaçu, "
-        "usando la correlación de Hausen para flujo laminar no desarrollado. "
-        "Se eliminan aquí las validaciones anteriores para concentrar la lectura en las dos magnitudes de interés: temperatura de salida y eficiencia térmica."
+        "La validación se separa de la calibración. Primero se identifican parámetros usando solamente una muestra documental; "
+        "después esos parámetros quedan congelados y se prueban contra datos que no participaron del ajuste."
+    )
+
+    workflow_cols = st.columns([1.45, 1.0, 1.0])
+    validation_case_labels = {
+        "Rea Quille · Foz do Iguaçu · 12 meses": "rea_foz",
+        "Rea Quille · Alvorada do Norte · 12 meses": "rea_alvorada",
+    }
+    validation_case_label = workflow_cols[0].selectbox(
+        "Conjunto para calibración + validación",
+        list(validation_case_labels.keys()),
+        key="validation_case_selector_v14",
+    )
+    validation_case = validation_case_labels[validation_case_label]
+    workflow_cols[1].metric("Muestra de calibración", "4 meses")
+    workflow_cols[2].metric("Hold-out", "8 meses")
+    st.caption(
+        "Calibración: enero, abril, julio y octubre. Validación fuera de muestra: los ocho meses restantes. "
+        "Los meses de hold-out nunca entran en la función objetivo del optimizador."
+    )
+
+    # ------------------------------------------------------------------
+    # Prueba diagnóstica: absorbedor -> HTF (Bhambare/Sukhatme).
+    # ------------------------------------------------------------------
+    # V14.12 · Auditoría directa de régimen/correlación interna.
+    # La etapa anterior mezclaba correlación y propiedades de Paratherm.
+    # Aquí se cambia SOLO la correlación y se prueba también con agua.
+    # ------------------------------------------------------------------
+    st.markdown("#### Prueba diagnóstica · régimen y correlación interna · agua + Paratherm")
+    st.write(
+        "Esta etapa separa explícitamente la elección de correlación de las propiedades del HTF. "
+        "Se usa exactamente la misma base termofísica y se cambia únicamente la ley de Nusselt. "
+        "El punto clave es comprobar si el agua de Rea Quille —que no depende de las propiedades de Paratherm— también está siendo afectada por la hipótesis de Nu=4.36 plenamente desarrollado."
+    )
+    st.latex(r"Re=\frac{4\dot m}{\pi D\mu},\qquad Gz=Re\,Pr\frac{D}{L},\qquad h=\frac{Nu\,k}{D}")
+    st.caption(
+        "Se comparan cuatro ramas: Nu=4.36 plenamente desarrollado; Hausen con corrección de entrada laminar; "
+        "Sieder–Tate laminar en desarrollo; y Dittus–Boelter forzado como control documental. "
+        "Dittus no se interpreta como válido cuando Re está fuera de su dominio turbulento. Ninguna rama se adopta automáticamente como modelo final."
     )
 
     if st.button(
-        "Generar validación mensual Foz · Hausen",
-        type="primary",
-        width="stretch",
-        key="run_rea_foz_hausen_validation_v1413",
+        "Ejecutar auditoría de régimen/correlación",
+        type="primary", width="stretch", key="run_internal_correlation_audit_v1412",
     ):
         try:
-            with st.spinner("Ejecutando los 12 casos mensuales de Foz do Iguaçu con correlación de Hausen..."):
-                st.session_state.validations["rea_foz_hausen"] = validate_rea_quille_foz_hausen(fluid_db)
+            with st.spinner("Comparando correlaciones en Foz, Alvorada y Bhambare..."):
+                st.session_state.validations["internal_correlation_audit"] = run_internal_correlation_audit(fluid_db)
         except Exception as exc:
             st.exception(exc)
 
-    validation_result = st.session_state.validations.get("rea_foz_hausen")
-    if isinstance(validation_result, dict):
-        metrics = validation_result["metrics"]
-        table = validation_result["table"]
+    corr_audit = st.session_state.validations.get("internal_correlation_audit")
+    if isinstance(corr_audit, dict):
+        regime = corr_audit["regime_table"]
+        metrics_corr = corr_audit["metrics_table"]
+        monthly_corr = corr_audit["monthly_table"]
+        bh_corr = corr_audit["bhambare_table"]
+        bh_errors_corr = corr_audit["bhambare_errors"]
 
-        top = st.columns(5)
-        top[0].metric("RMSE Tout", f"{metrics['RMSE_Tout_C']:.2f} °C")
-        top[1].metric("MAPE Tout", f"{metrics['MAPE_Tout_pct']:.2f} %")
-        top[2].metric("RMSE η", f"{metrics['RMSE_eta_pp']:.2f} p.p.")
-        top[3].metric("MAPE η", f"{metrics['MAPE_eta_pct']:.2f} %")
-        top[4].metric("Bias η", f"{metrics['Bias_eta_pp']:+.2f} p.p.")
+        # Resumen rápido de régimen: agua primero, porque responde directamente
+        # a la objeción de que el problema podría ser solo Paratherm.
+        foz_reg = regime.loc[regime["Ciudad_caso"] == "Foz"].iloc[0]
+        alv_reg = regime.loc[regime["Ciudad_caso"] == "Alvorada"].iloc[0]
+        bh_reg = regime.loc[regime["Ciudad_caso"] == "Bhambare"].iloc[0]
+        top = st.columns(6)
+        top[0].metric("Re máx. · Foz agua", f"{foz_reg['Re_max']:.0f}")
+        top[1].metric("Lth/L · Foz", f"{foz_reg['Lth_sobre_L']:.2f}")
+        top[2].metric("Re máx. · Alvorada agua", f"{alv_reg['Re_max']:.0f}")
+        top[3].metric("Lth/L · Alvorada", f"{alv_reg['Lth_sobre_L']:.2f}")
+        top[4].metric("Re medio · Bhambare", f"{bh_reg['Re_mean']:.0f}")
+        top[5].metric("Mejor RMSE conjunto", corr_audit.get("best_combined_label", "—"))
 
-        st.plotly_chart(validation_rea_foz_figure(table), width="stretch", key="rea_foz_hausen_figure_v1413")
-        st.plotly_chart(validation_rea_foz_error_figure(table), width="stretch", key="rea_foz_hausen_error_v1413")
-        st.caption(validation_result.get("note", ""))
+        st.info(corr_audit["diagnosis"])
 
-        with st.expander("Ver tabla mensual exacta", expanded=False):
-            st.dataframe(table, width="stretch", hide_index=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(regime_map_figure(monthly_corr, bh_corr), width="stretch", key="corr_regime_map_v1412")
+        with c2:
+            st.plotly_chart(rmse_comparison_figure(metrics_corr), width="stretch", key="corr_rmse_v1412")
+
+        city_plot = st.selectbox(
+            "Ciudad para inspeccionar la forma mensual",
+            ["Foz", "Alvorada"],
+            key="corr_audit_city_v1412",
+        )
+        c3, c4 = st.columns(2)
+        with c3:
+            st.plotly_chart(nu_by_month_figure(monthly_corr, city_plot), width="stretch", key=f"corr_nu_{city_plot}_v1412")
+        with c4:
+            st.plotly_chart(efficiency_curves_figure(monthly_corr, city_plot), width="stretch", key=f"corr_eta_{city_plot}_v1412")
+
+        st.plotly_chart(bhambare_correlation_figure(bh_corr), width="stretch", key="corr_bhambare_h_v1412")
+
+        st.markdown("**Indicadores de validación con agua · sin calibrar propiedades**")
+        st.dataframe(
+            metrics_corr[[
+                "Ciudad", "Correlacion", "RMSE_eta_pp", "MAE_eta_pp", "Bias_eta_pp",
+                "r_eta", "RMSE_Tout_C", "Re_mean", "Nu_mean", "h_mean_W_m2K", "Lth_sobre_L_mean"
+            ]],
+            width="stretch", hide_index=True,
+        )
+
+        with st.expander("Ver datos exactos de régimen/correlación", expanded=False):
+            st.markdown("**Resumen de régimen**")
+            st.dataframe(regime, width="stretch", hide_index=True)
+            st.markdown("**Resultados mensuales completos · agua**")
+            st.dataframe(monthly_corr, width="stretch", hide_index=True)
+            st.markdown("**Bhambare · resultados por correlación**")
+            st.dataframe(bh_corr, width="stretch", hide_index=True)
+            st.markdown("**Bhambare/Sukhatme · errores por correlación**")
+            st.dataframe(bh_errors_corr, width="stretch", hide_index=True)
             st.download_button(
-                "Descargar validación Foz · Hausen · CSV",
-                data=table.to_csv(index=False).encode("utf-8-sig"),
-                file_name="validacion_rea_foz_hausen.csv",
-                mime="text/csv",
-                width="stretch",
-                key="download_rea_foz_hausen_csv_v1413",
+                "Descargar resultados mensuales · CSV",
+                data=monthly_corr.to_csv(index=False).encode("utf-8-sig"),
+                file_name="auditoria_correlacion_interna_rea.csv",
+                mime="text/csv", width="stretch", key="download_corr_monthly_v1412",
             )
+            st.download_button(
+                "Descargar Bhambare/Sukhatme · CSV",
+                data=bh_errors_corr.to_csv(index=False).encode("utf-8-sig"),
+                file_name="auditoria_correlacion_interna_bhambare.csv",
+                mime="text/csv", width="stretch", key="download_corr_bh_v1412",
+            )
+        st.caption(corr_audit.get("note", ""))
 
-    st.info("La sección Gráficos replica estas mismas curvas si deseas revisarlas por separado.")
+    st.divider()
+
+    registry = inverse_parameter_options(validation_case, fluid_db)
+    label_to_id = {spec["label"]: pid for pid, spec in registry.items()}
+    default_ids = ["eta_opt_eff"]
+    default_labels = [registry[pid]["label"] for pid in default_ids if pid in registry]
+    selected_labels = st.multiselect(
+        "Parámetros a calibrar",
+        list(label_to_id.keys()),
+        default=default_labels,
+        key=f"validation_parameters_{validation_case}",
+        help="Seleccione solamente parámetros inciertos. Los valores publicados deberían permanecer fijos.",
+    )
+    selected_ids = [label_to_id[label] for label in selected_labels]
+
+    if selected_ids:
+        preview = pd.DataFrame([
+            {
+                "Parámetro": registry[pid]["label"],
+                "Nominal": registry[pid]["nominal"],
+                "Límite inferior": registry[pid]["bounds"][0],
+                "Límite superior": registry[pid]["bounds"][1],
+                "Estado": registry[pid]["status"],
+            }
+            for pid in selected_ids
+        ])
+        with st.expander("Parámetros que entrarán en la calibración", expanded=False):
+            st.dataframe(preview, width="stretch", hide_index=True)
+
+    controls = st.columns([1.0, 1.35])
+    max_nfev = controls[0].slider(
+        "Máx. evaluaciones",
+        min_value=8,
+        max_value=60,
+        value=18,
+        step=2,
+        key=f"validation_nfev_{validation_case}",
+    )
+    run_validation = controls[1].button(
+        "Calibrar con 4 meses y validar en 8 no usados",
+        type="primary",
+        width="stretch",
+        disabled=not selected_ids,
+        key="run_calibration_holdout_v14",
+    )
+    if run_validation:
+        try:
+            with st.spinner("Calibrando la muestra y reejecutando automáticamente los ocho meses de hold-out..."):
+                st.session_state.validations["model_validation"] = calibrate_inverse_model(
+                    validation_case,
+                    fluid_db,
+                    selected_ids,
+                    monthly_strategy="alternating",
+                    max_nfev=max_nfev,
+                )
+        except Exception as exc:
+            st.exception(exc)
+
+    validation_result = st.session_state.validations.get("model_validation")
+    if isinstance(validation_result, dict) and validation_result.get("case") == validation_case:
+        st.divider()
+        st.markdown("#### Resultado: calibración → validación fuera de muestra")
+        summary = calibration_error_summary(validation_result)
+        top = st.columns(6)
+        top[0].metric("Score muestra · antes", f"{validation_result['score_before_pct']:.2f} %")
+        top[1].metric("Score muestra · calibrado", f"{validation_result['score_after_pct']:.2f} %")
+        top[2].metric("Score hold-out", f"{summary.get('holdout_score_pct', float('nan')):.2f} %")
+        top[3].metric("RMSE η hold-out", f"{summary.get('eta_rmse', float('nan')):.2f} pp")
+        top[4].metric("MAPE η hold-out", f"{summary.get('eta_mape_pct', float('nan')):.2f} %")
+        top[5].metric("RMSE Tout hold-out", f"{summary.get('tout_rmse', float('nan')):.2f} °C")
+
+        if validation_result.get("success") and validation_result.get("physically_admissible"):
+            st.success("La calibración terminó dentro de los límites físicos impuestos; los indicadores anteriores corresponden a datos no usados en el ajuste.")
+        else:
+            st.warning(f"La calibración terminó con advertencias: {validation_result.get('message', '—')}")
+        if not validation_result.get("locally_identifiable", True):
+            st.warning("El Jacobiano indica identificabilidad débil: varios conjuntos de parámetros pueden producir respuestas parecidas.")
+
+        comparison = validation_comparison_table(validation_result)
+        holdout_table = comparison.loc[comparison["Conjunto"] == "validación"].copy() if not comparison.empty else pd.DataFrame()
+        if not holdout_table.empty:
+            st.markdown("**Datos no usados durante la calibración**")
+            st.dataframe(holdout_table, width="stretch", hide_index=True)
+            eta_hold = holdout_table.loc[holdout_table["Magnitud"] == "Eta_pct"].copy()
+            if not eta_hold.empty:
+                improved = eta_hold.loc[eta_hold["Error_calibrado_pct"].abs() < eta_hold["Error_inicial_pct"].abs()]
+                worsened = eta_hold.loc[eta_hold["Error_calibrado_pct"].abs() > eta_hold["Error_inicial_pct"].abs()]
+                g = st.columns(3)
+                g[0].metric("Meses mejorados", f"{len(improved)}/{len(eta_hold)}")
+                g[1].metric("Meses que empeoran", f"{len(worsened)}/{len(eta_hold)}")
+                g[2].metric("Generalización", "Consistente" if len(worsened) == 0 else "Mixta")
+                if len(worsened):
+                    details = ", ".join(
+                        f"{row.Caso}: {abs(row.Error_inicial_pct):.2f}% → {abs(row.Error_calibrado_pct):.2f}%"
+                        for row in worsened.itertuples()
+                    )
+                    st.warning(
+                        "El error global puede disminuir aunque algunos meses empeoren, porque el optimizador minimiza una función conjunta. "
+                        f"Meses con pérdida de precisión: {details}."
+                    )
+
+        st.markdown("**Parámetros calibrados**")
+        st.dataframe(validation_result["parameter_table"], width="stretch", hide_index=True)
+        action = st.columns(3)
+        if action[0].button(
+            "Usar parámetros calibrados en el simulador",
+            type="primary",
+            width="stretch",
+            key="apply_latest_calibration_v14",
+        ):
+            try:
+                apply_calibrated_parameters(st.session_state.config, st.session_state.fluid_database, validation_result)
+                st.session_state.results = {}
+                st.session_state.result_signature = None
+                st.session_state.ui_revision += 1
+                st.success("Parámetros calibrados aplicados al proyecto activo.")
+                st.rerun()
+            except Exception as exc:
+                st.exception(exc)
+        export_validation = io.BytesIO()
+        with pd.ExcelWriter(export_validation, engine="openpyxl") as writer:
+            validation_result["parameter_table"].to_excel(writer, sheet_name="Parametros_calibrados", index=False)
+            comparison.to_excel(writer, sheet_name="Calibracion_y_holdout", index=False)
+            pd.DataFrame([summary]).to_excel(writer, sheet_name="Indicadores_holdout", index=False)
+        action[1].download_button(
+            "Exportar calibración + validación",
+            data=export_validation.getvalue(),
+            file_name=f"validacion_holdout_{validation_case}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+        if action[2].button(
+            "Abrir gráficos",
+            width="stretch",
+            key="open_validation_charts_v14_2",
+        ):
+            st.session_state["_pending_widget_state"] = {"main_section_v14": "Gráficos"}
+            st.rerun()
+
+    st.divider()
+    with st.expander("Benchmarks documentales · diagnóstico adicional", expanded=False):
+        st.caption(
+            "Estos benchmarks sirven para auditar el modelo contra literatura, pero no sustituyen la validación fuera de muestra. "
+            "Bhambare/Sukhatme es un único caso; Fiamonzini Tabela 8 carece de varias entradas horarias experimentales."
+        )
+        bench_cols = st.columns(2)
+        if bench_cols[0].button("Bhambare vs Sukhatme", width="stretch", key="compact_bhambare_v14"):
+            try:
+                st.session_state.validations["compact_bhambare"] = validate_bhambare_mode(
+                    fluid_db, target_key="sukhatme", parameter_template="nominal"
+                )
+            except Exception as exc:
+                st.exception(exc)
+        if bench_cols[1].button("Rea/Fiamonzini · Tabela 8", width="stretch", key="compact_rea_proto_v14"):
+            try:
+                st.session_state.validations["compact_prototype"] = validate_rea_prototype_mode(
+                    "trnsys_published", fluid_db, target_key="experimental", dni_source="nominal", parameter_template="nominal"
+                )
+            except Exception as exc:
+                st.exception(exc)
+        if "compact_bhambare" in st.session_state.validations:
+            bv = st.session_state.validations["compact_bhambare"]
+            bm = bv["metrics"]
+            c = st.columns(4)
+            c[0].metric("RMSRE", f"{bm['RMSRE_pct']:.2f} %")
+            c[1].metric("MAPE multivariable", f"{bm['MAPE_multivariable_pct']:.2f} %")
+            c[2].metric("Bias relativo", f"{bm['Bias_rel_medio_pct']:+.2f} %")
+            c[3].metric("Error máximo", f"{bm['Error_max_pct']:.2f} %")
+            st.dataframe(bv["table"], width="stretch", hide_index=True)
+        if "compact_prototype" in st.session_state.validations:
+            pv = st.session_state.validations["compact_prototype"]
+            pm = pv["metrics"]
+            c = st.columns(4)
+            c[0].metric("MAE η", f"{pm['MAE_pp']:.2f} pp")
+            c[1].metric("RMSE η", f"{pm['RMSE_pp']:.2f} pp")
+            c[2].metric("MAPE η", f"{pm['MAPE_pct']:.2f} %")
+            c[3].metric("η Python media", f"{pm['Eta_python_mean_pct']:.2f} %")
+            st.dataframe(pv["table"], width="stretch", hide_index=True)
 
 elif main_section == "Gráficos":
     st.subheader("Gráficos de validación")
     st.caption(
-        "Esta sección visualiza nuevamente la validación mensual de Rea Quille en Foz do Iguaçu con correlación de Hausen. "
-        "No recalcula parámetros ni modifica el modelo."
+        "Esta sección no recalcula ni modifica el modelo. Visualiza exactamente los datos de la última calibración/validación guardada en la sesión, "
+        "separando los meses usados para calibrar de los meses hold-out que nunca participaron del ajuste."
     )
 
-    graph_validation = st.session_state.validations.get("rea_foz_hausen")
+    graph_validation = st.session_state.validations.get("model_validation")
     if not isinstance(graph_validation, dict):
-        st.info("Todavía no existe una validación de Foz/Hausen en esta sesión. Ejecute primero la sección Validación.")
+        st.info("Todavía no existe una validación hold-out en esta sesión. Ejecute primero la sección Validación.")
     else:
-        st.plotly_chart(
-            validation_rea_foz_figure(graph_validation["table"]),
-            width="stretch",
-            key="rea_foz_hausen_graphs_page_v1413",
-        )
-        st.plotly_chart(
-            validation_rea_foz_error_figure(graph_validation["table"]),
-            width="stretch",
-            key="rea_foz_hausen_errors_page_v1413",
-        )
-        st.dataframe(graph_validation["table"], width="stretch", hide_index=True)
-        st.download_button(
-            "Descargar validación Foz · Hausen · CSV",
-            data=graph_validation["table"].to_csv(index=False).encode("utf-8-sig"),
-            file_name="validacion_rea_foz_hausen.csv",
-            mime="text/csv",
-            width="stretch",
-            key="download_rea_foz_hausen_csv_graphs_v1413",
-        )
+        graph_case = str(graph_validation.get("case", "—"))
+        case_names = {"rea_foz": "Rea Quille · Foz do Iguaçu", "rea_alvorada": "Rea Quille · Alvorada do Norte"}
+        comparison = validation_comparison_table(graph_validation)
+        summary = calibration_error_summary(graph_validation)
+
+        st.markdown(f"#### {case_names.get(graph_case, graph_case)}")
+        metric_cols = st.columns(6)
+        metric_cols[0].metric("Score hold-out · antes", f"{summary.get('holdout_score_before_pct', float('nan')):.2f} %")
+        metric_cols[1].metric("Score hold-out · después", f"{summary.get('holdout_score_pct', float('nan')):.2f} %")
+        metric_cols[2].metric("RMSE η", f"{summary.get('eta_rmse', float('nan')):.2f} pp")
+        metric_cols[3].metric("MAPE η", f"{summary.get('eta_mape_pct', float('nan')):.2f} %")
+        metric_cols[4].metric("RMSE Tout", f"{summary.get('tout_rmse', float('nan')):.2f} °C")
+        metric_cols[5].metric("MAPE Tout", f"{summary.get('tout_mape_pct', float('nan')):.2f} %")
+
+        if comparison.empty:
+            st.warning("La validación existe, pero no hay una tabla comparativa utilizable en la sesión actual.")
+        else:
+            graph_tab_eta, graph_tab_tout, graph_tab_scatter, graph_tab_residuals, graph_tab_data = st.tabs(
+                ["Eficiencia", "Temperatura de salida", "Predicción vs referencia", "Residuos", "Datos"]
+            )
+
+            with graph_tab_eta:
+                st.plotly_chart(
+                    validation_monthly_comparison_figure(comparison, "Eta_pct"),
+                    width="stretch",
+                    key=f"validation_graph_eta_monthly_{graph_case}",
+                )
+                st.plotly_chart(
+                    validation_holdout_error_figure(comparison, "Eta_pct"),
+                    width="stretch",
+                    key=f"validation_graph_eta_errors_{graph_case}",
+                )
+                st.caption(
+                    "El primer gráfico permite verificar si la calibración sigue la referencia mes a mes. "
+                    "El segundo usa exclusivamente los ocho meses hold-out y compara el error antes y después del ajuste."
+                )
+
+            with graph_tab_tout:
+                st.plotly_chart(
+                    validation_monthly_comparison_figure(comparison, "Tout_C"),
+                    width="stretch",
+                    key=f"validation_graph_tout_monthly_{graph_case}",
+                )
+                st.plotly_chart(
+                    validation_holdout_error_figure(comparison, "Tout_C"),
+                    width="stretch",
+                    key=f"validation_graph_tout_errors_{graph_case}",
+                )
+                st.caption(
+                    "La temperatura de salida se evalúa de forma independiente de la eficiencia. "
+                    "Un ajuste aceptable debe reducir el error fuera de muestra sin depender sólo de una magnitud."
+                )
+
+            with graph_tab_scatter:
+                sc_left, sc_right = st.columns(2)
+                with sc_left:
+                    st.plotly_chart(
+                        validation_prediction_scatter_figure(comparison, "Eta_pct"),
+                        width="stretch",
+                        key=f"validation_graph_eta_scatter_{graph_case}",
+                    )
+                with sc_right:
+                    st.plotly_chart(
+                        validation_prediction_scatter_figure(comparison, "Tout_C"),
+                        width="stretch",
+                        key=f"validation_graph_tout_scatter_{graph_case}",
+                    )
+                st.caption(
+                    "La línea diagonal representa predicción perfecta. Los puntos calibrados deberían acercarse a esa diagonal en datos que el optimizador nunca vio."
+                )
+
+            with graph_tab_residuals:
+                rs_left, rs_right = st.columns(2)
+                with rs_left:
+                    st.plotly_chart(
+                        validation_signed_residual_figure(comparison, "Eta_pct"),
+                        width="stretch",
+                        key=f"validation_graph_eta_residual_{graph_case}",
+                    )
+                with rs_right:
+                    st.plotly_chart(
+                        validation_signed_residual_figure(comparison, "Tout_C"),
+                        width="stretch",
+                        key=f"validation_graph_tout_residual_{graph_case}",
+                    )
+                st.caption(
+                    "Residual positivo = el modelo sobreestima la referencia; residual negativo = subestima. "
+                    "La alternancia alrededor de cero ayuda a detectar si queda un sesgo sistemático."
+                )
+
+            with graph_tab_data:
+                st.markdown("**Datos exactos detrás de los gráficos**")
+                st.dataframe(comparison, width="stretch", hide_index=True)
+                st.download_button(
+                    "Descargar datos de los gráficos (CSV)",
+                    data=comparison.to_csv(index=False).encode("utf-8"),
+                    file_name=f"graficos_validacion_{graph_case}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key=f"download_validation_graph_data_{graph_case}",
+                )
+                st.markdown("**Parámetros usados en la calibración**")
+                parameter_table = graph_validation.get("parameter_table")
+                if isinstance(parameter_table, pd.DataFrame) and not parameter_table.empty:
+                    st.dataframe(parameter_table, width="stretch", hide_index=True)
+                else:
+                    st.caption("No hay tabla de parámetros disponible.")
+
+        with st.expander("Cómo comprobar visualmente la validación", expanded=False):
+            st.markdown(
+                "1. **Bandas grises:** meses usados para identificar los parámetros. No cuentan como validación independiente.  \n"
+                "2. **Meses sin banda:** hold-out. Son los puntos que determinan si la calibración generaliza.  \n"
+                "3. **Barras de error:** si la barra calibrada es menor que la inicial, ese mes mejoró fuera de muestra.  \n"
+                "4. **Scatter:** cuanto más cerca de la diagonal `y=x`, mejor la predicción.  \n"
+                "5. **Residuos:** deberían distribuirse alrededor de cero; un signo dominante indica sesgo."
+            )
 
 elif main_section == "Sensibilidad":
     st.subheader("Sensibilidad y convergencia")
